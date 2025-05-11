@@ -1,6 +1,11 @@
-
 /**
- * @brief  EXT GPIO 类型定义
+ * @file ext_gpio_type.h
+ * @author Samuel (samuel@neptune-robotics.com)
+ * @brief 扩展GPIO类型定义
+ * @version 0.1
+ * @date 2025-05-11
+ * 
+ * @copyright Copyright (c) 2025
  * 
  */
 
@@ -9,6 +14,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +56,6 @@ typedef struct {
     uint16_t pin;
     uint16_t flags;
 }ext_gpio_config_t;
-
 
 
 #ifdef __cplusplus

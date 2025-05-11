@@ -11,7 +11,10 @@
 #include "esp_err.h"
 #include "ext_gpio_type.h"
 #include "ext_gpio_drive.h"
+#include "ext_gpio_event.h"
 #include "ext_gpio.h"
+
+#include "app_event_loop.h"
 
 #include "uptime.h"
 
@@ -139,7 +142,6 @@ typedef struct
     sys_tick_t long_expired;
     sys_tick_t click_expired;
 }button_manipulate_t;
-
 
 
 static gpio_manipulate_t s_gpios[CONFIG_EXT_GPIO_MAX_NUM] = { 0 };
@@ -525,7 +527,10 @@ static inline void _button_state_machine(button_manipulate_t *button)
             } else {
                 if (button->click_count > 0 && uptime_after(now, button->click_expired))
                 {
-                    // TODO 发送连击停止消息
+                    // 发送连击停止消息
+                    ext_gpio_send_button_event(button->id, gpio_name, 
+                                              EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK, 
+                                              button->click_count, 0);
 
                     button->click_count = 0;
                     ESP_LOGD(TAG, "button<%s> continue-click stop", gpio_name);
@@ -549,7 +554,11 @@ static inline void _button_state_machine(button_manipulate_t *button)
                 button->click_count ++;
                 button->click_expired = now + CONFIG_EXT_BUTTON_DEFAULT_CONTINUE_CLICK_EXPIRED_MS;
 
-                // TODO 发送按下消息
+                // 发送按下消息
+                ext_gpio_send_button_event(button->id, gpio_name, 
+                                          EXT_GPIO_EVENT_BUTTON_PRESSED, 
+                                          button->click_count, 0);
+                
                 ESP_LOGD(TAG, "button<%s> pressed(%d)", gpio_name, button->click_count);
             }
             break;
@@ -564,7 +573,11 @@ static inline void _button_state_machine(button_manipulate_t *button)
                     // 长按时间间隔为1秒
                     button->expired = now + 1000;
 
-                    // TODO 发送长按消息
+                    // 发送长按消息
+                    ext_gpio_send_button_event(button->id, gpio_name, 
+                                              EXT_GPIO_EVENT_BUTTON_LONG_PRESSED, 
+                                              0, button->long_pressed);
+                    
                     ESP_LOGD(TAG, "button<%s> long pressed(%d)", gpio_name, button->long_pressed);
                 }
                 else if (button->long_pressed > 0 && uptime_after(now, button->expired))
@@ -572,7 +585,11 @@ static inline void _button_state_machine(button_manipulate_t *button)
                     button->long_pressed ++;
                     button->expired = now + 1000;
 
-                    // TODO 发送长按消息
+                    // 发送长按消息
+                    ext_gpio_send_button_event(button->id, gpio_name, 
+                                              EXT_GPIO_EVENT_BUTTON_LONG_PRESSED, 
+                                              0, button->long_pressed);
+                    
                     ESP_LOGD(TAG, "button<%s> long pressed(%d)", gpio_name, button->long_pressed);
                 }
             }
@@ -593,7 +610,11 @@ static inline void _button_state_machine(button_manipulate_t *button)
             {
                 button->state = _BUTTON_STATE_RELEASED;
 
-                // TODO 发送释放消息
+                // 发送释放消息
+                ext_gpio_send_button_event(button->id, gpio_name, 
+                                          EXT_GPIO_EVENT_BUTTON_RELEASED, 
+                                          button->click_count, button->long_pressed);
+                
                 ESP_LOGD(TAG, "button<%s> released", gpio_name);
             }
             break;

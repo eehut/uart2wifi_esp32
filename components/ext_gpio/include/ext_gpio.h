@@ -12,6 +12,7 @@
 #pragma once
 
 #include "ext_gpio_type.h"
+#include "ext_gpio_event_type.h"
 
 #ifdef __cplusplus
 extern "C" {
