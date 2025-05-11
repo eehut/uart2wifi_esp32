@@ -1,4 +1,3 @@
-
 /**
  * @file serial2ip_esp32.c
  * @author Samuel (samuel@neptune-robotics.com)
@@ -16,39 +15,50 @@
 #include "driver/gpio.h"
 
 #include "uptime.h"
+#include "ext_gpio.h"
 
 #include "esp_log.h"
 
-#define LED_PIN GPIO_NUM_7
-#define BLINK_DELAY_MS 1000
-
 static const char *TAG = "main";
+
+enum GPIO_IDS {
+    GPIO_SYS_LED = 0,
+    GPIO_BUTTON,
+};
+
+/// 系统GPIO配置
+static ext_gpio_config_t s_gpio_configs[] = {
+    { .id = GPIO_SYS_LED, .name = "sys_led", .chip = _GPIO_CHIP_SOC, .pin = GPIO_NUM_7, .flags = _GPIO_FLAG_OUTPUT },
+    { .id = GPIO_BUTTON, .name = "test", .chip = _GPIO_CHIP_SOC, .pin = GPIO_NUM_9, .flags = _GPIO_FLAG_BUTTON | _GPIO_FLAG_INPUT | _GPIO_FLAG_ACTIVE_LOW },
+};
 
 void app_main(void)
 {
-    sys_tick_t now = uptime();
-    sys_tick_t next_blink = now + 200;
-    int led_state = 0;
+    // 设置日志级别
+    esp_log_level_set("*", ESP_LOG_INFO);    // 设置所有模块的默认日志级别
+    esp_log_level_set("ext_gpio", ESP_LOG_DEBUG);  // 设置ext_gpio模块的日志级别
+    esp_log_level_set("main", ESP_LOG_DEBUG);      // 设置main模块的日志级别
 
+    ESP_LOGD(TAG, "Starting GPIO test...");
 
-    // 配置GPIO
-    gpio_reset_pin(LED_PIN);
-    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+    // 初始化GPIO
+    int ret = ext_gpio_config(s_gpio_configs, sizeof(s_gpio_configs) / sizeof(s_gpio_configs[0]));
+    if (ret != 0) {
+        ESP_LOGE(TAG, "init gpio failed!");
+        return;
+    }
 
-    ESP_LOGI(TAG, "LED初始化完成");
+    // 启动GPIO任务
+    ext_gpio_start();
+    
+    // 设置LED闪烁模式
+    // 0x33 = 00110011，表示LED会以更快的速度闪烁
+    ext_led_flash(GPIO_SYS_LED, 0x33, 0xFF);
+
+    ESP_LOGI(TAG, "gpio init done, please press button for button test");
 
     while (1) {
-        now = uptime();
-
-        //ESP_LOGI(TAG, "now: %u, next_blink: %u", now, next_blink);
-
-        if (uptime_after(now, next_blink)) {
-            ESP_LOGI(TAG, "set led %s", led_state ? "on" : "off");
-            gpio_set_level(LED_PIN, led_state);
-            led_state = !led_state;
-            next_blink = now + 200;
-        }
-
-        mdelay(10);
+        // 主循环中不需要做任何事情，因为LED闪烁和按键检测都在GPIO任务中处理
+        mdelay(1000);
     }
 }

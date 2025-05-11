@@ -14,6 +14,10 @@
 extern "C" {
 #endif
 
+#if configTICK_RATE_HZ != 1000
+#error "configTICK_RATE_HZ must be 1000"
+#endif
+
 /// 一个sys_tick的抽象
 typedef uint32_t sys_tick_t;
 
