@@ -84,8 +84,8 @@ void app_main(void)
 {
     // 设置日志级别
     esp_log_level_set("*", ESP_LOG_INFO);    // 设置所有模块的默认日志级别
-    esp_log_level_set("ext_gpio", ESP_LOG_DEBUG);  // 设置ext_gpio模块的日志级别
-    esp_log_level_set("app_event", ESP_LOG_DEBUG); // 设置app_event模块的日志级别
+    esp_log_level_set("ext-gpio", ESP_LOG_DEBUG);  // 设置ext_gpio模块的日志级别
+    esp_log_level_set("app-event", ESP_LOG_DEBUG); // 设置app_event模块的日志级别
     esp_log_level_set("main", ESP_LOG_DEBUG);      // 设置main模块的日志级别
 
     ESP_LOGI(TAG, "Starting GPIO test...");

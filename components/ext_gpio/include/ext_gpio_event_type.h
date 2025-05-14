@@ -11,16 +11,15 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
 #include "esp_event.h"
 
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 // 声明GPIO事件基础
 ESP_EVENT_DECLARE_BASE(EXT_GPIO_EVENTS);

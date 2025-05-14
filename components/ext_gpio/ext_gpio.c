@@ -20,7 +20,7 @@
 
 #include "esp_log.h"
 
-static const char *TAG = "ext_gpio";
+static const char *TAG = "ext-gpio";
 
 /**
  * @brief 工作周期，单位为毫秒

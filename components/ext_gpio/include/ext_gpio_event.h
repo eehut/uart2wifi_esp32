@@ -4,14 +4,14 @@
  */
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include "esp_err.h"
 
 #include "ext_gpio_event_type.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /**
  * @brief 发送按键事件

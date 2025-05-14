@@ -6,13 +6,13 @@
 
 #pragma once
 
-#include "esp_system.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #if configTICK_RATE_HZ != 1000
 #error "configTICK_RATE_HZ must be 1000"

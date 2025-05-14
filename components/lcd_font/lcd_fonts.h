@@ -11,11 +11,15 @@
  */
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "lcd_font_type.h"
 
 /// 默认启用Acorn8x8字体
-#ifndef CONFIG_LCD_FONT_ACORN_8X8
-#define CONFIG_LCD_FONT_ACORN_8X8 1
+#ifndef CONFIG_LCD_FONT_ACORN_ASCII_8X8
+#define CONFIG_LCD_FONT_ACORN_ASCII_8X8 1
 #endif
 
 /// 默认不启用console_number_32x48字体
@@ -25,8 +29,12 @@
 
 
 /// ASCII ACORN 8X8
-LCD_FONT_DECLARE(acorn8x8);
+LCD_FONT_DECLARE(acorn_ascii_8x8);
 
 /// 大号的数字 32*48 
 LCD_FONT_DECLARE(console_number_32x48);
+
+#ifdef __cplusplus
+}
+#endif
 

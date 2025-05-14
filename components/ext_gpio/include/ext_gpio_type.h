@@ -11,14 +11,13 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /**
  * @brief 定义GPIO的标志位

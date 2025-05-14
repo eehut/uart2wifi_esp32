@@ -16,7 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "app_event";
+static const char *TAG = "app-event";
 static esp_event_loop_handle_t s_event_loop = NULL;
 
 /**

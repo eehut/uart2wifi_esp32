@@ -11,12 +11,12 @@
 
 #pragma once
 
-#include "ext_gpio_type.h"
-#include "ext_gpio_event_type.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include "ext_gpio_type.h"
+#include "ext_gpio_event_type.h"
 
 /**
  * @brief 当前使用了的最大GPIO的数量，可在外部配置

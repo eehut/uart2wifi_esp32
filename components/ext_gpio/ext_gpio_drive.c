@@ -16,7 +16,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
-static const char *TAG = "ext_gpio";
+static const char *TAG = "ext-gpio";
 
 // esp32 not return output value, so we need to cache the output value
 static uint64_t s_soc_gpio_output_cache = 0;

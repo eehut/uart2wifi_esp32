@@ -84,11 +84,11 @@ const uint8_t *lcd_font_get_ascii_number_code(const void *self, uint32_t ch)
 }
 
 
-#if CONFIG_LCD_FONT_ACORN_8X8
+#if CONFIG_LCD_FONT_ACORN_ASCII_8X8
 #include "fonts/lcd_font_acorn_8x8.h"
-#endif 
+#endif // CONFIG_LCD_FONT_ACORN_ASCII_8X8
 
 #if CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48
 #include "fonts/lcd_font_console_number_32x48.h"
-#endif 
+#endif // CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48
 
