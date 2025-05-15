@@ -1,0 +1,500 @@
+/**
+ * @file lcd_display.c
+ * @author LiuChuansen (1797120666@qq.com)
+ * @brief LCD显示驱动实现
+ * @version 0.1
+ * @date 2025-05-14
+ * 
+ * @copyright Copyright (c) 2025
+ * 
+ */
+
+#include "lcd_display.h"
+#include "lcd_driver.h"
+#include "esp_log.h"
+#include "lcd_fonts.h"
+
+
+static const char *TAG = "lcd-driver";
+
+/**
+ * @brief OLED显示适配
+ * 
+ */
+typedef struct 
+{
+    /// 指向驱动
+    const lcd_driver_ops_t *driver;
+    /// 指向模型
+    const lcd_model_t *model;
+    /// 页数
+    uint16_t page_num;
+    /// 页大小
+    uint16_t page_size;
+    /// 大小
+    uint16_t xsize, ysize;
+    /// 旋转角度0,90,180,270
+    lcd_rotation_t rotation;
+    /// 是否为外部内存
+    bool extern_mem;
+    /// DRAM的大小
+    uint32_t dram_size;
+    /// 指向分配的内存
+    uint8_t *dram;
+    /// 指赂数据获取方式
+    uint8_t(*dram_get_data)(const void *disp, uint16_t, uint16_t);
+}lcd_display_t;
+
+
+/**
+ * @brief 获取RAM数据
+ * 
+ * @param oled 显示handle
+ * @param page 页
+ * @param col 列
+ * @return uint8_t 
+ * 
+ *    # 将横向DRAM转换为竖向的数据
+ *    # [B0][B1][B2]...[B15]
+ *    # [B16]...
+ *    # [7][6][5]... page p, clo c,
+ *    # [7][6][5]...
+ *    # [7][6][5]...
+ *    # b[7] = ram.0[7]  0 = ((128/8)*8)*p + [7-7] * (128 / 8)  7 = 7 - (c % 8)
+ *    # b[6] = ram.16[7] 16 = ((128/8)*8)*p + [7-6] * (128 / 8) c = 1, 6 c = 8, 7
+ *    # b[5] = ram.32[7] 32 = ((128/8)*8)*p + [7-5] * (128 / 8)
+ *    #  
+ *    # 要取出8个字节，每个字节取一位
+ *    # 取字偏移量公式f(p,b) = 128 * p + [7 - b] * 16
+ *    # 取字位公式 g(c) = 7 - (c % 8)
+ *    def dram_get_data(self, page, col)->int:
+ *        ret = 0
+ *        bit_ofs = 7 - (col % 8)
+ *        for b in range(8):
+ *            offs = self.xsize * page + b * (self.xsize // 8) + (col // 8)
+ *            ret >>= 1
+ *            if self.__dram[offs] & (1 << bit_ofs):
+ *                ret |= 0x80
+ *        return ret
+ */
+static uint8_t dram_get_data_r0(const void *disp, uint16_t page, uint16_t col)
+{
+    const lcd_display_t *lcd = (const lcd_display_t *)disp;
+    uint8_t ret = 0;
+    int bit_offset = 7 - (col & 0x07);
+    int offs = lcd->page_size * page + (col >> 3);
+    for (int i = 0; i < 8; i ++)
+    {
+        ret >>= 1;
+        if (lcd->dram[offs] & (1 << bit_offset))
+        {
+            ret |= 0x80;
+        }
+        offs += (lcd->page_size >> 3);
+    }
+
+    return ret;
+}
+
+/**
+ * @brief 旋转180度时的刷新数据
+ * 
+ * @param lcd 
+ * @param page 
+ * @param col 
+ * @return uint8_t 
+ */
+static uint8_t dram_get_data_r180(const void *disp, uint16_t page, uint16_t col)
+{
+    const lcd_display_t *lcd = (const lcd_display_t *)disp;    
+    uint8_t ret = 0;
+    int bit_offset = (col & 0x07);
+    int offs = lcd->page_size * (lcd->page_num - page - 1) + ((lcd->page_size - col - 1) >> 3);
+    for (int i = 0; i < 8; i ++)
+    {
+        ret <<= 1;
+        if (lcd->dram[offs] & (1 << bit_offset))
+        {
+            ret |= 0x01;
+        }
+        offs += (lcd->page_size >> 3);
+    }
+
+    return ret;
+}
+
+/**
+ * @brief 旋转90度时取页数据
+ * 
+ * @param lcd 
+ * @param page 
+ * @param col 
+ * @return uint8_t 
+ */
+static uint8_t dram_get_data_r90(const void *disp, uint16_t page, uint16_t col)
+{
+    const lcd_display_t *lcd = (const lcd_display_t *)disp;    
+    int offs = lcd->page_num * col + (lcd->page_num - 1 - page);
+    return lcd->dram[offs];
+}
+
+/**
+ * @brief 旋转270度时取页数据
+ * 
+ * @param lcd 
+ * @param page 
+ * @param col 
+ * @return uint8_t 
+ */
+static uint8_t dram_get_data_r270(const void *disp, uint16_t page, uint16_t col)
+{
+    const lcd_display_t *lcd = (const lcd_display_t *)disp;
+    int offs = (lcd->page_num * (lcd->page_size - col - 1)) + page;
+    uint8_t raw = lcd->dram[offs];
+    // 位需要交换顺序
+    raw = (raw << 4) | (raw >> 4);
+    raw = ((raw << 2) & 0xCC) | ((raw >> 2) & 0x33);
+    return ((raw << 1) & 0xAA) | ((raw >> 1) & 0x55);    
+}
+
+
+
+/**
+ * @brief 创建一个OLED显示屏
+ * 
+ * @param driver 指向驱动
+ * @param model 指向显示模型
+ * @param rotation 旋转角度
+ * @param static_mem 静态内存，如果为空，使用动态分配的内存
+ * @param mem_size 静态内存大小
+ * @return void* 
+ * 返回一个OLED的HANDLE
+ */
+lcd_handle_t lcd_display_create(const lcd_driver_ops_t *driver, const lcd_model_t *model, lcd_rotation_t rotation, uint8_t *static_mem, uint32_t mem_size)
+{
+    lcd_display_t *lcd;
+    int page_num = model->ysize / 8;
+    int dram_size = model->xsize * page_num;
+
+    /// 使用静态内存，确认是否足够
+    if (static_mem && mem_size)
+    {
+        if (sizeof(*lcd) + dram_size > mem_size)
+        {
+            ESP_LOGE(TAG, "Static memory size is too small, expected:%d, got:%d", sizeof(*lcd) + dram_size, mem_size);
+            return NULL;
+        }
+
+        memset(static_mem, 0, mem_size);
+
+        lcd = (lcd_display_t *)static_mem;
+        lcd->dram = &static_mem[sizeof(*lcd)];    
+        lcd->extern_mem = true;    
+    }
+    else 
+    {
+        lcd = (lcd_display_t *)malloc(sizeof(*lcd) + dram_size);
+        if (lcd == NULL)
+        {
+            ESP_LOGE(TAG, "malloc(%d) failed", sizeof(*lcd) + dram_size);
+            return NULL;
+        }
+
+        memset(lcd, 0, sizeof(*lcd) + dram_size);
+
+        lcd->dram = (uint8_t *)&lcd[1];
+        lcd->extern_mem = false;
+    }
+
+    lcd->driver = driver;
+    lcd->model = model;
+    lcd->xsize = model->xsize;
+    lcd->ysize = model->ysize;
+    lcd->page_size = model->xsize;
+    lcd->page_num = page_num;
+    lcd->dram_size = dram_size;
+    lcd->rotation = rotation;
+
+    if (lcd->rotation == LCD_ROTATION_90)
+    {
+        lcd->xsize = model->ysize;
+        lcd->ysize = model->xsize;
+
+        lcd->dram_get_data = dram_get_data_r90;
+    }
+    else if (lcd->rotation == LCD_ROTATION_180)
+    {
+        lcd->dram_get_data = dram_get_data_r180;
+    }
+    else if (lcd->rotation == LCD_ROTATION_270)
+    {
+        lcd->xsize = model->ysize;
+        lcd->ysize = model->xsize;                
+        lcd->dram_get_data = dram_get_data_r270;
+    }
+    else 
+    {
+        lcd->dram_get_data = dram_get_data_r0;
+    }
+
+    // 初始化函数 
+    driver->init(driver->data);
+
+    ESP_LOGI(TAG, "lcd display created, %dX%d Rotate:%d", model->xsize, model->ysize, lcd->rotation);
+    
+    return lcd;    
+}
+
+
+/**
+ * @brief 销废一个显示器
+ * 
+ * @param disp 
+ */
+void lcd_display_destory(lcd_handle_t disp)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+
+    if (lcd && (lcd->extern_mem == false))    
+    {
+        free(lcd);
+    }
+}
+
+
+static inline void _set_command(const lcd_display_t *disp, uint8_t cmd)
+{
+    _lcd_write_command(disp->driver, cmd);
+}
+
+static inline void _set_data(const lcd_display_t *disp, uint8_t data)
+{
+    _lcd_write_data(disp->driver, data);
+}
+
+
+/**
+ * @brief 刷新屏幕数据
+ * 
+ * @param disp 
+ */
+static void lcd_refresh1(const lcd_display_t *disp)
+{
+    for (int p = 0; p < disp->page_num; p ++)
+    {
+        _set_command(disp, 0xb0 + p);
+        _set_command(disp, 0x00);
+        _set_command(disp, 0x10);
+
+        for (int c = 0; c < disp->page_size; c ++)
+        {
+            _set_data(disp, disp->dram_get_data(disp, p, c));
+        }
+    }
+}
+
+/**
+ * @brief 刷新屏幕数据(多页刷新)
+ * 
+ * @param disp 
+ */
+static void lcd_refresh2(const lcd_display_t *disp)
+{
+    for (int p = 0; p < disp->page_num; p ++)
+    {
+        _set_command(disp, 0xb0);
+        _set_command(disp, p);
+        _set_command(disp, 0x00);
+        _set_command(disp, 0x11);
+
+        // 每次读出一列数据
+        // 第一列数据，应该是MSB[b7@0.0][b7@0.1]
+        for (int c = 0; c < disp->page_size; c ++)
+        {
+            _set_data(disp, disp->dram_get_data(disp, p, c));
+        }
+    }
+}
+
+
+/**
+ * @brief 刷新屏幕数据
+ * 
+ * @param disp 
+ */
+void lcd_refresh(lcd_handle_t disp)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+
+    if (lcd->page_num <= 8)
+    {
+        lcd_refresh1(lcd);
+    }
+    else 
+    {
+        lcd_refresh2(lcd);
+    }
+}
+
+/**
+ * @brief 启动显示器
+ * 
+ * @param disp 
+ */
+void lcd_startup(lcd_handle_t disp)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+
+    _lcd_reset(lcd->driver);
+
+    for (int i = 0; i < lcd->model->init_data_size; i ++)
+    {
+        _set_command(lcd, lcd->model->init_datas[i]);
+    }
+}
+
+
+/**
+ * @brief 填充指定的数据 
+ * 
+ * @param disp 
+ * @param data 
+ */
+void lcd_fill(lcd_handle_t disp, uint8_t data)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+    memset(lcd->dram, data, lcd->dram_size);
+}
+
+
+/**
+ * @brief 显示指定的连续位，高字节开始有效
+ * 
+ * @param oled 
+ * @param x 
+ * @param y 
+ * @param value 
+ * @param nbits 
+ */
+static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8_t value, uint8_t nbits)
+{
+    // 求出所在坐标点的字节位偏移量
+    int offs = y * disp->xsize + x;
+
+    for (int i = 0; i < nbits; i ++, offs ++)
+    {
+        // 有位偏移后，根据位偏移，得到字节偏移: offs >> 3， 得到位偏移为(offs & 0x07）
+        // 因为我们显存是高位在左，低位在右（字库也是按这样排的） [B0] == {b7 b6 b5 b4 b3 b2 b1 b0}
+        // 位偏移为0，表示在第七位，位偏移为1，表示在第6位...
+
+        // 总是从高位开始处理，高位放在左边
+        if (value & 0x80)
+        {
+            disp->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+        } 
+        else 
+        {
+            disp->dram[offs >> 3] &= ~(1 << (7 - (offs & 0x07)));
+        }
+        value <<= 1;
+    }
+}
+
+
+/**
+ * @brief 查找字库并显示，较底层函数，不考虑能否显示。
+ * 
+ * @param disp disp handle
+ * @param x 
+ * @param y 
+ * @param ch 
+ * @param font 
+ * @param refresh 
+ */
+void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;    
+    int data_index = 0;
+
+    if (font == NULL)
+    {
+        ESP_LOGE(TAG, "No font specified!!");
+        return ;
+    }
+
+    const uint8_t *font_code = font->get_code_data(font, ch);
+    if (font_code == NULL)
+    {
+        ESP_LOGE(TAG, "Unabled to find font data of %06x", ch);
+        return ;
+    }
+
+    // 根据字体的宽度和大小设置显存位
+    for (int h = 0; h < font->height; h ++)
+    {
+        // 算出字库一行有多少个字节，注意字宽度不为8的整数时
+        int left_bits = font->width;
+        int byte_index = 0;
+
+        while (left_bits > 0)
+        {
+            // 拿到第一个字节的数据，根据宽度处理数据
+            int fbits = (left_bits > 8) ? 8 : left_bits;
+            uint8_t fdata = font_code[data_index ++];
+
+            // // 如果最后一个字节宽度小于8，一般是低位为无效位
+            _set_dram_bits(lcd, x + byte_index * 8, y + h, fdata, fbits);
+
+            left_bits -= fbits;
+            byte_index ++;
+        }
+    }
+
+    // 刷新
+    if (refresh)
+    {
+        lcd_refresh(disp);
+    }
+}
+
+
+/**
+ * @brief 显示一串文本， 这是一个比较底层的函数，如果显示内容超出所在行，不显示, 暂不支持非ASCII字串
+ * 
+ * @param disp 
+ * @param x 显示位置X
+ * @param y 显示位置Y
+ * @param text 需要显示的文本
+ * @param font 字体
+ * @param refresh 是否刷新 
+ * 
+ * @return int 返回显示的数量
+ */
+int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;       
+    const char *ch = text;     
+    int count = 0;
+
+    // 先看看y的位置是否足够显示 
+    if ((lcd->ysize - y) < font->height)
+    {
+        return count;
+    }
+
+    // 看看剩余空间能否显示该字体
+    while (*ch && ((lcd->xsize - x) >= font->width))
+    {
+        lcd_display_char(disp, x, y, *ch, font, false);    
+        ch ++;
+        x += font->width;
+        count ++;
+    }
+
+    if (refresh)
+    {
+        lcd_refresh(disp);
+    }
+
+    return count;
+}
