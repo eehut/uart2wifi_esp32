@@ -9,12 +9,64 @@
  * 
  */
 #include "lcd_driver.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "bus_manager.h"
 
 static const char *TAG = "lcd-driver";
 
+// 定义最大支持的LCD实例数
+#ifndef CONFIG_LCD_MAX_I2C_DRIVER_NUM
+#define CONFIG_LCD_MAX_I2C_DRIVER_NUM  1
+#endif
+
+// LCD设备句柄结构体
+typedef struct {
+    i2c_bus_t bus;           // 总线ID
+    uint16_t address;         // 设备地址
+    i2c_master_dev_handle_t handle;   // 设备句柄
+    bool in_use;              // 是否在使用
+} lcd_i2c_device_t;
+
+// LCD设备数组
+static lcd_i2c_device_t s_lcd_i2c_devices[CONFIG_LCD_MAX_I2C_DRIVER_NUM] = {0};
+
+// 根据总线ID和地址查找设备
+static lcd_i2c_device_t* lcd_find_device(i2c_bus_t bus, uint16_t address)
+{
+    for (int i = 0; i < CONFIG_LCD_MAX_I2C_DRIVER_NUM; i++) {
+        if (s_lcd_i2c_devices[i].in_use && 
+            s_lcd_i2c_devices[i].bus == bus && 
+            s_lcd_i2c_devices[i].address == address) {
+            return &s_lcd_i2c_devices[i];
+        }
+    }
+    return NULL;
+}
+
+// 分配新设备
+static lcd_i2c_device_t* lcd_allocate_device(i2c_bus_t bus, uint16_t address)
+{
+    // 先查找是否已存在
+    lcd_i2c_device_t* device = lcd_find_device(bus, address);
+    if (device) {
+        return device;
+    }
+    
+    // 查找空闲槽位
+    for (int i = 0; i < CONFIG_LCD_MAX_I2C_DRIVER_NUM; i++) {
+        if (!s_lcd_i2c_devices[i].in_use) {
+            s_lcd_i2c_devices[i].bus = bus;
+            s_lcd_i2c_devices[i].address = address;
+            s_lcd_i2c_devices[i].in_use = true;
+            return &s_lcd_i2c_devices[i];
+        }
+    }
+    return NULL;
+}
 
 /**
  * @brief I2C port initial, if pin is valid, then try to bind pin to i2c port
@@ -24,47 +76,89 @@ static const char *TAG = "lcd-driver";
 void lcd_ops_i2c_init(const void *drv)
 {
     const lcd_i2c_data_t *i2c = (const lcd_i2c_data_t *)drv;
-
-    if (i2c->sda < 0 || i2c->scl < 0) {
-        ESP_LOGE(TAG, "Invalid I2C pins: sda=%d, scl=%d", i2c->sda, i2c->scl);
+    
+    // 查找或分配设备
+    lcd_i2c_device_t *device = lcd_allocate_device(i2c->bus, i2c->address);
+    if (!device) {
+        ESP_LOGE(TAG, "Failed to allocate LCD device, max devices reached");
         return;
     }
     
-    i2c_config_t config = {0};
-    config.mode = I2C_MODE_MASTER;
-    config.sda_io_num = i2c->sda;
-    config.scl_io_num = i2c->scl;
-    config.sda_pullup_en = GPIO_PULLUP_ENABLE;
-    config.scl_pullup_en = GPIO_PULLUP_ENABLE;
-    config.master.clk_speed = i2c->rate ? i2c->rate : 400000; // 400KHz
-
-    esp_err_t ret = i2c_param_config(i2c->port, &config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_param_config failed: %s", esp_err_to_name(ret));
+    // 如果设备已初始化，直接返回
+    if (device->handle != NULL) {
+        ESP_LOGW(TAG, "LCD device already initialized");
         return;
     }
     
-    ret = i2c_driver_install(i2c->port, config.mode, 0, 0, 0);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
+    // 获取总线句柄
+    i2c_master_bus_handle_t bus_handle = i2c_bus_get_handle(i2c->bus);
+    if (bus_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to get I2C bus handle");
         return;
     }
-
-    ESP_LOGI(TAG, "i2c driver init success");
+    
+    // 配置I2C设备
+    const i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = i2c->address,
+        .scl_speed_hz = 400000, // 默认400KHz
+    };
+    
+    // 添加I2C设备
+    esp_err_t ret = i2c_master_bus_add_device(bus_handle, &dev_config, &device->handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_master_bus_add_device failed");
+        return;
+    }
+    
+    ESP_LOGI(TAG, "LCD device (bus=%d, addr=0x%02X) initialized success", i2c->bus, i2c->address);
 }
 
 /// I2C写
 void lcd_ops_i2c_write(const void *drv, bool cmd, uint8_t data)
 {
     const lcd_i2c_data_t *i2c = (const lcd_i2c_data_t *)drv;
+    
+    // 查找设备
+    lcd_i2c_device_t *device = lcd_find_device(i2c->bus, i2c->address);
+    if (!device || !device->handle) {
+        ESP_LOGE(TAG, "LCD device not initialized");
+        return;
+    }
+    
     uint8_t val[2];
-
     val[0] = cmd ? 0x00 : 0x40;
     val[1] = data;
-
-    i2c_master_write_to_device(i2c->port, i2c->address, val, 2, pdMS_TO_TICKS(100));
+    
+    esp_err_t ret = i2c_master_transmit(device->handle, val, 2, pdMS_TO_TICKS(100));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_master_transmit failed: %s", esp_err_to_name(ret));
+    }
 }
 
+/// I2C反初始化
+void lcd_ops_i2c_deinit(const void *drv)
+{
+    const lcd_i2c_data_t *i2c = (const lcd_i2c_data_t *)drv;
+    
+    // 查找设备
+    lcd_i2c_device_t *device = lcd_find_device(i2c->bus, i2c->address);
+    if (!device || !device->handle) {
+        return;
+    }
+    
+    // 移除设备
+    esp_err_t ret = i2c_master_bus_rm_device(device->handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_master_bus_rm_device failed: %s", esp_err_to_name(ret));
+    }
+    
+    // 清除设备状态
+    device->handle = NULL;
+    device->in_use = false;
+    
+    ESP_LOGI(TAG, "LCD device (bus=%d, addr=0x%02X) deinitialized", i2c->bus, i2c->address);
+}
 
 /// SPI 初始化
 void lcd_ops_gpio_spi_init(const void *drv)
@@ -104,6 +198,8 @@ void lcd_ops_gpio_spi_init(const void *drv)
     
     ESP_LOGI(TAG, "gpio-spi driver init success");
 }
+
+
 /// SPI写
 void lcd_ops_gpio_spi_write(const void *drv, bool cmd, uint8_t data)
 {
@@ -118,19 +214,25 @@ void lcd_ops_gpio_spi_write(const void *drv, bool cmd, uint8_t data)
         {
             gpio_set_level(spi->scl, 0);
             gpio_set_level(spi->sda, 1);
+            esp_rom_delay_us(100);
             gpio_set_level(spi->scl, 1);
+            esp_rom_delay_us(100);
             gpio_set_level(spi->sda, 1);
         }
         else 
         {
             gpio_set_level(spi->scl, 0);
             gpio_set_level(spi->sda, 0);
+            esp_rom_delay_us(100);
             gpio_set_level(spi->scl, 1);
+            esp_rom_delay_us(100);
             gpio_set_level(spi->sda, 0);
         }
         data <<= 1;
     }
 }
+
+
 /// SPI 复位
 void lcd_ops_gpio_spi_reset(const void *drv)
 {

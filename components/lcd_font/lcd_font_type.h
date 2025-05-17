@@ -91,7 +91,7 @@ static const uint8_t s_lcd_font_data_##_name[] =
  * codeSize： width 8个位为一个字节，不足8位也算一字节
  */
 #define LCD_FONT_DEFINE(_name, _width, _height, _func) \
-const lcd_font_t g_lcd_font##_name = { \
+const lcd_font_t g_lcd_font_##_name = { \
     .name = #_name,  \
     .width = _width, .height = _height, \
     .code_size = ((((_width) >> 3) + (((_width) & 0x7) ? 1 : 0)) * (_height)), \
@@ -105,13 +105,13 @@ const lcd_font_t g_lcd_font##_name = { \
  * 
  */
 #define LCD_FONT_DECLARE(_name) \
-extern const lcd_font_t g_lcd_font##_name 
+extern const lcd_font_t g_lcd_font_##_name 
 
 /**
  * @brief 引用一个字体
  * 
  */
-#define LCD_FONT(_name) &g_lcd_font##_name 
+#define LCD_FONT(_name) &g_lcd_font_##_name 
 
 /// 定义一个ASCII字体
 #define LCD_ASCII_FONT_DEFINE(_name, _width, _height) LCD_FONT_DEFINE(_name, _width, _height, lcd_font_get_ascii_code)

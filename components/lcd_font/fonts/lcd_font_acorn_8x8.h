@@ -6,7 +6,7 @@
  * @brief 字体名称 Acorn8x8 
  * 
  */
-LCD_FONT_DATA_DEFINE(acorn8x8)
+LCD_FONT_DATA_DEFINE(acorn_ascii_8x8)
 {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //  ^@ // 
     0x7e, 0x81, 0xa5, 0x81, 0xbd, 0x99, 0x81, 0x7e, //  ^A // 
@@ -268,5 +268,5 @@ LCD_FONT_DATA_DEFINE(acorn8x8)
 
 
 
-LCD_ASCII_FONT_DEFINE(acorn8x8, 8, 8);
+LCD_ASCII_FONT_DEFINE(acorn_ascii_8x8, 8, 8);
 

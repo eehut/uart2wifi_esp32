@@ -1,6 +1,6 @@
 idf_component_register(SRCS "serial2ip_esp32.c"
                     INCLUDE_DIRS "."
-                    REQUIRES driver esp_common uptime ext_gpio app_event_loop lcd_display)
+                    REQUIRES driver esp_common uptime ext_gpio app_event_loop bus_manager lcd_font lcd_display)
 
 # 为ext_gpio组件设置编译宏
 idf_component_get_property(ext_gpio ext_gpio COMPONENT_LIB)

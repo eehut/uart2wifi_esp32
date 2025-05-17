@@ -1,4 +1,3 @@
-
 #ifndef __LCD_DRIVER_H__
 #define __LCD_DRIVER_H__
 
@@ -18,9 +17,10 @@
  #endif
 
  #include "esp_types.h"
- #include "driver/i2c.h"
+ #include "driver/i2c_master.h"
  #include "driver/gpio.h"
- 
+ #include "bus_manager.h"
+
 
 /**
  * @brief I2C驱动总线接口
@@ -28,11 +28,8 @@
  */
 typedef struct 
 {
-    int16_t port;
-    int16_t address;
-    int16_t sda;
-    int16_t scl;
-    int16_t rate;
+    i2c_bus_t bus;       // 总线ID
+    uint16_t address;      // 设备地址
 }lcd_i2c_data_t;
 
 
@@ -104,6 +101,8 @@ static inline void lcd_ops_dummy(const void *drv)
 extern void lcd_ops_i2c_init(const void *drv);
 /// I2C写
 extern void lcd_ops_i2c_write(const void *drv, bool cmd, uint8_t data);
+/// I2C反初始化
+extern void lcd_ops_i2c_deinit(const void *drv);
 
 
 /// SPI 初始化
@@ -115,8 +114,8 @@ extern void lcd_ops_gpio_spi_reset(const void *drv);
 
 
 /// 声明一个I2C的驱动 
-#define LCD_DEFINE_DRIVER_I2C(_name, _port, _addr, _sda, _scl, _rate) \
-static const lcd_i2c_data_t s_lcd_data_##_name = {.port = _port, .address = _addr, .sda = _sda, .scl = _scl, .rate = _rate}; \
+#define LCD_DEFINE_DRIVER_I2C(_name, _bus, _addr) \
+static const lcd_i2c_data_t s_lcd_data_##_name = {.bus = _bus, .address = _addr}; \
 static const lcd_driver_ops_t s_lcd_driver_##_name = \
 { \
     .data = &s_lcd_data_##_name, \

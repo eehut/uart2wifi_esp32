@@ -83,7 +83,7 @@ esp_err_t app_event_handler_unregister(esp_event_base_t event_base,
                                       esp_event_handler_t event_handler)
 {
     if (s_event_loop == NULL) {
-        ESP_LOGE(TAG, "事件循环未初始化");
+        ESP_LOGE(TAG, "event loop not initialized");
         return ESP_ERR_INVALID_STATE;
     }
 

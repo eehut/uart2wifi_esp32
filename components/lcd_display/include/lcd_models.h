@@ -14,7 +14,7 @@ extern "C" {
 #define LCD_SSD1312_128X64 3
 
 /*
-    FOR SSD1036
+    FOR SSD1306
     0xae, #display off
     0x20, #Set Memory Addressing Mode    
     0x10, #00,Horizontal Addressing Mode;01,Vertical Addressing Mode;10,Page Addressing Mode (RESET);11,Invalid
@@ -44,7 +44,7 @@ extern "C" {
     0x14, #
     0xaf #--turn on oled panel
 */
-#define SSD1036_INIT_DATAS { \
+#define SSD1306_INIT_DATAS { \
 0xae, 0x20, 0x10, 0xb0, 0xc8, 0x00, 0x10, 0x40, \
 0x81, 0xff, 0xa1, 0xa6, 0xa8, 0x3f, 0xa4, 0xd3, \
 0x00, 0xd5, 0xf0, 0xd9, 0x22, 0xda, 0x12, 0xdb, \
@@ -53,8 +53,37 @@ extern "C" {
 
 /// 预定义的MODEL
 #define LCD_DEFINE_SSD1306_128X64(_name) \
-LCD_MODEL_DEFINE(LCD_SSD1306_128X64, _name, 128, 64, SSD1036_INIT_DATAS)
+LCD_MODEL_DEFINE(LCD_SSD1306_128X64, _name, 128, 64, SSD1306_INIT_DATAS)
 
+/*
+    FOR SSD1312
+    0xAE,           #display off
+    0x20, 0x10,     #Set Memory Addressing Mode #00,Horizontal Addressing Mode;01,Vertical Addressing Mode;10,Page Addressing Mode (RESET);11,Invalid        
+    0xC0,           #Set COM Output Scan Direction, C0H - normal mode, C8H - inverted mode
+    0x40,           #--set start line address
+    0x81, 0x7F,     #--set contrast control register, 0x00~0xff
+    0xA1,           #--set segment re-map 0 to 127, A0H - normal mode, A1H - remap 0 to 127
+    0xA6,           #--set normal display, A6H - normal display, A7H - inverted display
+    0xA8, 0x3F,     #--set multiplex ratio(1 to 64)
+    0xA4,           #0xA4,Output follows RAM content;0xA5,Output ignores RAM content
+    0xD3, 0x00,     #-set display offset, 0x00 - no offset
+    0xD5, 0xF0,     #--set display clock divide ratio/oscillator frequency, 
+    0xD9, 0x22,     #--set pre-charge period, 
+    0xDA, 0x10,     #--set com pins hardware configuration
+    0xDB, 0x20,     #--set vcomh, 0x20,0.77xVcc
+    0x8D, 0x12,     #--set DC-DC enable
+    0xAF,           #--turn on oled panel
+*/
+#define SSD1312_INIT_DATAS { \
+0xAE, 0x20, 0x10, 0xC0, 0x40, 0x81, 0x7F, 0xA1, \
+0xA6, 0xA8, 0x3F, 0xA4, 0xD3, 0x00, 0xD5, 0xF0, \
+0xD9, 0x22, 0xDA, 0x10, 0xDB, 0x20, 0x8D, 0x12, \
+0xAF \
+}
+
+/// 预定义的MODEL
+#define LCD_DEFINE_SSD1312_128X64(_name) \
+LCD_MODEL_DEFINE(LCD_SSD1312_128X64, _name, 128, 64, SSD1312_INIT_DATAS)
 
 /*
     FOR SH1108

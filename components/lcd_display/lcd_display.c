@@ -13,7 +13,7 @@
 #include "lcd_driver.h"
 #include "esp_log.h"
 #include "lcd_fonts.h"
-
+#include "uptime.h"
 
 static const char *TAG = "lcd-driver";
 
@@ -35,8 +35,10 @@ typedef struct
     uint16_t xsize, ysize;
     /// 旋转角度0,90,180,270
     lcd_rotation_t rotation;
-    /// 是否为外部内存
-    bool extern_mem;
+    /// 标志
+#define LCD_FLAG_EXTERN_MEM         (1 << 0)
+#define LCD_FLAG_PRINT_REFRESH_TIME (1 << 1)
+    uint32_t flags;
     /// DRAM的大小
     uint32_t dram_size;
     /// 指向分配的内存
@@ -189,7 +191,7 @@ lcd_handle_t lcd_display_create(const lcd_driver_ops_t *driver, const lcd_model_
 
         lcd = (lcd_display_t *)static_mem;
         lcd->dram = &static_mem[sizeof(*lcd)];    
-        lcd->extern_mem = true;    
+        lcd->flags |= LCD_FLAG_EXTERN_MEM;    
     }
     else 
     {
@@ -203,7 +205,6 @@ lcd_handle_t lcd_display_create(const lcd_driver_ops_t *driver, const lcd_model_
         memset(lcd, 0, sizeof(*lcd) + dram_size);
 
         lcd->dram = (uint8_t *)&lcd[1];
-        lcd->extern_mem = false;
     }
 
     lcd->driver = driver;
@@ -237,6 +238,9 @@ lcd_handle_t lcd_display_create(const lcd_driver_ops_t *driver, const lcd_model_
         lcd->dram_get_data = dram_get_data_r0;
     }
 
+    // 默认打印刷新时间
+    lcd->flags |= LCD_FLAG_PRINT_REFRESH_TIME;
+
     // 初始化函数 
     driver->init(driver->data);
 
@@ -255,7 +259,7 @@ void lcd_display_destory(lcd_handle_t disp)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;
 
-    if (lcd && (lcd->extern_mem == false))    
+    if (lcd && !(lcd->flags & LCD_FLAG_EXTERN_MEM))    
     {
         free(lcd);
     }
@@ -282,7 +286,9 @@ static void lcd_refresh1(const lcd_display_t *disp)
 {
     for (int p = 0; p < disp->page_num; p ++)
     {
+        // 页地址B0-B7H
         _set_command(disp, 0xb0 + p);
+        // 列地址总是从0开始, 00H-0FH 10H-17H 
         _set_command(disp, 0x00);
         _set_command(disp, 0x10);
 
@@ -325,6 +331,7 @@ static void lcd_refresh2(const lcd_display_t *disp)
 void lcd_refresh(lcd_handle_t disp)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;
+    sys_tick_t start_time = uptime();
 
     if (lcd->page_num <= 8)
     {
@@ -333,6 +340,14 @@ void lcd_refresh(lcd_handle_t disp)
     else 
     {
         lcd_refresh2(lcd);
+    }
+
+    sys_tick_t end_time = uptime();
+
+    if (lcd->flags & LCD_FLAG_PRINT_REFRESH_TIME)
+    {
+        ESP_LOGI(TAG, "lcd refresh time: %d ms", end_time - start_time);
+        lcd->flags &= ~LCD_FLAG_PRINT_REFRESH_TIME;
     }
 }
 
@@ -462,8 +477,8 @@ void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t 
  * @brief 显示一串文本， 这是一个比较底层的函数，如果显示内容超出所在行，不显示, 暂不支持非ASCII字串
  * 
  * @param disp 
- * @param x 显示位置X
- * @param y 显示位置Y
+ * @param x 显示位置X, 水平方向, 从左到右
+ * @param y 显示位置Y, 垂直方向, 从上到下
  * @param text 需要显示的文本
  * @param font 字体
  * @param refresh 是否刷新 
