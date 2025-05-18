@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "bus_manager.h"
+#include <stdint.h>
 
 static const char *TAG = "lcd-driver";
 
@@ -115,7 +116,38 @@ void lcd_ops_i2c_init(const void *drv)
 }
 
 /// I2C写
-void lcd_ops_i2c_write(const void *drv, bool cmd, uint8_t data)
+static void lcd_ops_i2c_write(lcd_i2c_device_t *device, uint8_t cmd, const uint8_t *data, uint16_t size)
+{
+    const uint16_t max_packet_size = 32;
+    uint16_t remaining = size;
+    const uint8_t *ptr = data;
+
+    while (remaining > 0) {
+        uint16_t packet_size = (remaining > max_packet_size) ? max_packet_size : remaining;
+
+        i2c_master_transmit_multi_buffer_info_t infos[2] = {0};
+        infos[0].write_buffer = &cmd;
+        infos[0].buffer_size = 1;
+
+        infos[1].write_buffer = (uint8_t *)ptr;
+        infos[1].buffer_size = packet_size;
+        
+        esp_err_t ret = i2c_master_multi_buffer_transmit(device->handle, infos, 2, pdMS_TO_TICKS(100));
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "i2c_master_multi_buffer_transmit failed: %s", esp_err_to_name(ret));
+            return;
+        }
+
+        ptr += packet_size;
+        remaining -= packet_size;
+
+        // 延时1ms
+        //vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+/// I2C写
+void lcd_ops_i2c_write_command(const void *drv, const uint8_t *data, uint16_t size)
 {
     const lcd_i2c_data_t *i2c = (const lcd_i2c_data_t *)drv;
     
@@ -125,40 +157,25 @@ void lcd_ops_i2c_write(const void *drv, bool cmd, uint8_t data)
         ESP_LOGE(TAG, "LCD device not initialized");
         return;
     }
-    
-    uint8_t val[2];
-    val[0] = cmd ? 0x00 : 0x40;
-    val[1] = data;
-    
-    esp_err_t ret = i2c_master_transmit(device->handle, val, 2, pdMS_TO_TICKS(100));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_master_transmit failed: %s", esp_err_to_name(ret));
-    }
+
+    lcd_ops_i2c_write(device, 0x00, data, size);
 }
 
-/// I2C反初始化
-void lcd_ops_i2c_deinit(const void *drv)
+/// I2C写数据
+void lcd_ops_i2c_write_dram_data(const void *drv, const uint8_t *data, uint16_t size)
 {
     const lcd_i2c_data_t *i2c = (const lcd_i2c_data_t *)drv;
     
     // 查找设备
     lcd_i2c_device_t *device = lcd_find_device(i2c->bus, i2c->address);
     if (!device || !device->handle) {
+        ESP_LOGE(TAG, "LCD device not initialized");
         return;
     }
-    
-    // 移除设备
-    esp_err_t ret = i2c_master_bus_rm_device(device->handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_master_bus_rm_device failed: %s", esp_err_to_name(ret));
-    }
-    
-    // 清除设备状态
-    device->handle = NULL;
-    device->in_use = false;
-    
-    ESP_LOGI(TAG, "LCD device (bus=%d, addr=0x%02X) deinitialized", i2c->bus, i2c->address);
+
+    lcd_ops_i2c_write(device, 0x40, data, size);
 }
+
 
 /// SPI 初始化
 void lcd_ops_gpio_spi_init(const void *drv)
@@ -184,7 +201,6 @@ void lcd_ops_gpio_spi_init(const void *drv)
     if (has_rst) {
         cfg.pin_bit_mask |= (1ULL << gpio_spi->rst);
     }
-
     
     cfg.mode = GPIO_MODE_OUTPUT;
     cfg.pull_up_en = GPIO_PULLUP_DISABLE;
@@ -201,10 +217,8 @@ void lcd_ops_gpio_spi_init(const void *drv)
 
 
 /// SPI写
-void lcd_ops_gpio_spi_write(const void *drv, bool cmd, uint8_t data)
+static void lcd_ops_gpio_spi_write(const lcd_spi_data_t *spi, bool cmd, uint8_t data)
 {
-    const lcd_spi_data_t *spi = (const lcd_spi_data_t *)drv;
-
     // 决定写的是命令还是数据 
     gpio_set_level(spi->dc, cmd ? 0 : 1);
 
@@ -214,24 +228,37 @@ void lcd_ops_gpio_spi_write(const void *drv, bool cmd, uint8_t data)
         {
             gpio_set_level(spi->scl, 0);
             gpio_set_level(spi->sda, 1);
-            esp_rom_delay_us(100);
             gpio_set_level(spi->scl, 1);
-            esp_rom_delay_us(100);
             gpio_set_level(spi->sda, 1);
         }
         else 
         {
             gpio_set_level(spi->scl, 0);
             gpio_set_level(spi->sda, 0);
-            esp_rom_delay_us(100);
             gpio_set_level(spi->scl, 1);
-            esp_rom_delay_us(100);
             gpio_set_level(spi->sda, 0);
         }
         data <<= 1;
     }
 }
 
+void lcd_ops_gpio_spi_write_command(const void *drv, const uint8_t *data, uint16_t size)
+{
+    const lcd_spi_data_t *spi = (const lcd_spi_data_t *)drv;
+    for (int i = 0; i < size; i++)
+    {
+        lcd_ops_gpio_spi_write(spi, true, data[i]);
+    }
+}
+
+void lcd_ops_gpio_spi_write_dram_data(const void *drv, const uint8_t *data, uint16_t size)
+{
+    const lcd_spi_data_t *spi = (const lcd_spi_data_t *)drv;
+    for (int i = 0; i < size; i++)
+    {
+        lcd_ops_gpio_spi_write(spi, false, data[i]);
+    }
+}
 
 /// SPI 复位
 void lcd_ops_gpio_spi_reset(const void *drv)

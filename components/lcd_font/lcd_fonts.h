@@ -23,7 +23,7 @@ extern "C" {
 
 /// 默认不启用console_number_32x48字体
 #ifndef CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48
-#define CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48 1
+#define CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48 0
 #endif
 
 /// ASCII ACORN 8X8

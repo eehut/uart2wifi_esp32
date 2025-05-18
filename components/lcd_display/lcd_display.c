@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "lcd_fonts.h"
 #include "uptime.h"
+#include <stdint.h>
 
 static const char *TAG = "lcd-driver";
 
@@ -266,16 +267,30 @@ void lcd_display_destory(lcd_handle_t disp)
 }
 
 
-static inline void _set_command(const lcd_display_t *disp, uint8_t cmd)
+static inline void _set_multi_command(const lcd_display_t *disp, const uint8_t *cmd, uint16_t size)
 {
-    _lcd_write_command(disp->driver, cmd);
+    _lcd_write_command(disp->driver, cmd, size);
 }
 
-static inline void _set_data(const lcd_display_t *disp, uint8_t data)
+static inline void _set_command0(const lcd_display_t *disp, uint8_t cmd)
 {
-    _lcd_write_data(disp->driver, data);
+    _lcd_write_command0(disp->driver, cmd);
 }
 
+static inline void _set_command1(const lcd_display_t *disp, uint8_t cmd, uint8_t data)
+{
+    _lcd_write_command1(disp->driver, cmd, data);
+}
+
+static inline void _set_command2(const lcd_display_t *disp, uint8_t cmd, uint8_t data1, uint8_t data2)
+{
+    _lcd_write_command2(disp->driver, cmd, data1, data2);
+}
+
+static inline void _set_data_array(const lcd_display_t *disp, const uint8_t *data, uint16_t size)
+{
+    _lcd_write_data(disp->driver, data, size);
+}
 
 /**
  * @brief 刷新屏幕数据
@@ -287,15 +302,20 @@ static void lcd_refresh1(const lcd_display_t *disp)
     for (int p = 0; p < disp->page_num; p ++)
     {
         // 页地址B0-B7H
-        _set_command(disp, 0xb0 + p);
-        // 列地址总是从0开始, 00H-0FH 10H-17H 
-        _set_command(disp, 0x00);
-        _set_command(disp, 0x10);
+        // _set_command(disp, 0xb0 + p);
+        // // 列地址总是从0开始, 00H-0FH 10H-17H 
+        // _set_command(disp, 0x00);
+        // _set_command(disp, 0x10);
 
+        uint8_t cmd[3] = {0xb0 + p, 0x00, 0x10};
+        _set_multi_command(disp, cmd, 3);
+
+        uint8_t data[disp->page_size];
         for (int c = 0; c < disp->page_size; c ++)
         {
-            _set_data(disp, disp->dram_get_data(disp, p, c));
+            data[c] = disp->dram_get_data(disp, p, c);
         }
+        _set_data_array(disp, data, disp->page_size);
     }
 }
 
@@ -308,17 +328,22 @@ static void lcd_refresh2(const lcd_display_t *disp)
 {
     for (int p = 0; p < disp->page_num; p ++)
     {
-        _set_command(disp, 0xb0);
-        _set_command(disp, p);
-        _set_command(disp, 0x00);
-        _set_command(disp, 0x11);
+        // _set_command(disp, 0xb0);
+        // _set_command(disp, p);
+        // _set_command(disp, 0x00);
+        // _set_command(disp, 0x11);
+
+        uint8_t cmd[4] = {0xb0, p, 0x00, 0x11};
+        _set_multi_command(disp, cmd, 4);
 
         // 每次读出一列数据
         // 第一列数据，应该是MSB[b7@0.0][b7@0.1]
+        uint8_t data[disp->page_size];        
         for (int c = 0; c < disp->page_size; c ++)
         {
-            _set_data(disp, disp->dram_get_data(disp, p, c));
+            data[c] = disp->dram_get_data(disp, p, c);
         }
+        _set_data_array(disp, data, disp->page_size);
     }
 }
 
@@ -362,10 +387,12 @@ void lcd_startup(lcd_handle_t disp)
 
     _lcd_reset(lcd->driver);
 
-    for (int i = 0; i < lcd->model->init_data_size; i ++)
-    {
-        _set_command(lcd, lcd->model->init_datas[i]);
-    }
+    _set_multi_command(lcd, lcd->model->init_datas, lcd->model->init_data_size);
+
+    // for (int i = 0; i < lcd->model->init_data_size; i ++)
+    // {
+    //     _set_command(lcd, lcd->model->init_datas[i]);
+    // }
 }
 
 
@@ -512,4 +539,46 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
     }
 
     return count;
+}
+
+
+int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;    
+    
+    // 参数检查
+    if (!lcd || width <= 0 || height <= 0) {
+        return -1;
+    }
+
+    // 检查是否超出屏幕范围
+    if (x >= lcd->xsize || y >= lcd->ysize) {
+        return -1;
+    }
+
+    // 调整宽度和高度，确保不超出屏幕
+    if (x + width > lcd->xsize) {
+        width = lcd->xsize - x;
+    }
+    if (y + height > lcd->ysize) {
+        height = lcd->ysize - y;
+    }
+
+    // 根据字体的宽度和大小设置显存位
+    for (int h = 0; h < height; h++) {
+        // 算出一行有多少个字节
+        int left_bits = width;
+        int byte_index = 0;
+
+        while (left_bits > 0) {
+            // 每次处理8位
+            int fbits = (left_bits > 8) ? 8 : left_bits;
+            // 使用0来清除显示
+            _set_dram_bits(lcd, x + byte_index * 8, y + h, 0x00, fbits);
+            left_bits -= fbits;
+            byte_index++;
+        }
+    }
+
+    return 0;
 }

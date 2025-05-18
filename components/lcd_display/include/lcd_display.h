@@ -8,6 +8,7 @@ extern "C" {
 #include "lcd_driver.h"
 #include "lcd_models.h"
 #include "lcd_fonts.h"
+#include <string.h>
 
 // 旋转角度
 typedef enum {
@@ -92,6 +93,17 @@ void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t 
  */
 int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool refresh);
 
+/**
+ * @brief 清除指定区域的显示内容
+ * 
+ * @param disp LCD显示句柄
+ * @param x 起始x坐标
+ * @param y 起始y坐标
+ * @param width 要清除的宽度(像素)
+ * @param height 要清除的高度(像素)
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height);
 
 #ifdef __cplusplus
 }

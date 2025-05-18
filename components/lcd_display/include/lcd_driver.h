@@ -12,7 +12,8 @@
  * 
  */
 
- #ifdef __cplusplus
+ #include <stdint.h>
+#ifdef __cplusplus
  extern "C" {
  #endif
 
@@ -56,34 +57,54 @@ typedef struct
     /// 驱动数据 
     const void *data;
     /// 初始化
-    void (*init)(const void *);
-    /// 写数据
-    void (*write)(const void *, bool, uint8_t);
+    void (*init)(const void *);    
     /// 复位
     void (*reset)(const void *);
+    /// 写命令
+    void (*write_command)(const void *, const uint8_t *, uint16_t);
+    /// 写数据
+    void (*write_dram_data)(const void *, const uint8_t *, uint16_t);
 }lcd_driver_ops_t;
 
 
 ///声明快速OPS操作函数
+static inline void _lcd_init(const lcd_driver_ops_t *ops)
+{
+    ops->init(ops->data);
+}
+
 static inline void _lcd_reset(const lcd_driver_ops_t *ops)
 {
     ops->reset(ops->data);
 }
 
-static inline void _lcd_write_command(const lcd_driver_ops_t *ops, uint8_t data)
+static inline void _lcd_write_command(const lcd_driver_ops_t *ops, const uint8_t *cmd, uint16_t size)
 {
-    ops->write(ops->data, true, data);
+    ops->write_command(ops->data, cmd, size);
 }
 
-static inline void _lcd_write_data(const lcd_driver_ops_t *ops, uint8_t data)
+static inline void _lcd_write_command0(const lcd_driver_ops_t *ops, uint8_t cmd)
 {
-    ops->write(ops->data, false, data);
+    ops->write_command(ops->data, &cmd, 1);
 }
 
-static inline void _lcd_init(const lcd_driver_ops_t *ops)
+static inline void _lcd_write_command1(const lcd_driver_ops_t *ops, uint8_t cmd, uint8_t data)
 {
-    ops->init(ops->data);
+    uint8_t cmd_data[2] = {cmd, data};
+    ops->write_command(ops->data, cmd_data, 2);
 }
+
+static inline void _lcd_write_command2(const lcd_driver_ops_t *ops, uint8_t cmd, uint8_t data1, uint8_t data2)
+{
+    uint8_t cmd_data[3] = {cmd, data1, data2};
+    ops->write_command(ops->data, cmd_data, 3);
+}
+
+static inline void _lcd_write_data(const lcd_driver_ops_t *ops, const uint8_t *data, uint16_t size)
+{
+    ops->write_dram_data(ops->data, data, size);
+}
+
 
 /// 声明驱动接口函数
 
@@ -100,15 +121,17 @@ static inline void lcd_ops_dummy(const void *drv)
 /// I2C 初始化
 extern void lcd_ops_i2c_init(const void *drv);
 /// I2C写
-extern void lcd_ops_i2c_write(const void *drv, bool cmd, uint8_t data);
-/// I2C反初始化
-extern void lcd_ops_i2c_deinit(const void *drv);
+extern void lcd_ops_i2c_write_command(const void *drv, const uint8_t *data, uint16_t size);
+/// I2C写数据
+extern void lcd_ops_i2c_write_dram_data(const void *drv, const uint8_t *data, uint16_t size);
 
 
 /// SPI 初始化
 extern void lcd_ops_gpio_spi_init(const void *drv);
 /// SPI写
-extern void lcd_ops_gpio_spi_write(const void *drv, bool cmd, uint8_t data);
+extern void lcd_ops_gpio_spi_write_command(const void *drv, const uint8_t *data, uint16_t size);
+/// SPI写数据
+extern void lcd_ops_gpio_spi_write_dram_data(const void *drv, const uint8_t *data, uint16_t size);
 /// SPI 复位
 extern void lcd_ops_gpio_spi_reset(const void *drv);
 
@@ -120,7 +143,8 @@ static const lcd_driver_ops_t s_lcd_driver_##_name = \
 { \
     .data = &s_lcd_data_##_name, \
     .init = lcd_ops_i2c_init, \
-    .write = lcd_ops_i2c_write, \
+    .write_command = lcd_ops_i2c_write_command, \
+    .write_dram_data = lcd_ops_i2c_write_dram_data, \
     .reset = lcd_ops_dummy \
 }
 
@@ -131,7 +155,8 @@ static const lcd_driver_ops_t s_lcd_driver_##_name = \
 { \
     .data = &s_lcd_data_##_name, \
     .init = lcd_ops_gpio_spi_init, \
-    .write = lcd_ops_gpio_spi_write, \
+    .write_command = lcd_ops_gpio_spi_write_command, \
+    .write_dram_data = lcd_ops_gpio_spi_write_dram_data, \
     .reset = lcd_ops_gpio_spi_reset \
 }
 
