@@ -20,6 +20,15 @@ extern "C" {
 #include "esp_types.h"
 
 
+/**
+ * @brief 是否启用扩展ASCII字符
+ * 
+ * @note 
+ *   如果启用，则字符集为ASCII + 扩展ASCII
+ */
+#ifndef CONFIG_LCD_FONT_EXTENDED_ASCII 
+#define CONFIG_LCD_FONT_EXTENDED_ASCII 0
+#endif
 
 /**
  * @brief 定义一个字体

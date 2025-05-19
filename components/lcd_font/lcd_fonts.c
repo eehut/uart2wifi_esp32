@@ -27,11 +27,19 @@ const uint8_t *lcd_font_get_ascii_code(const void *self, uint32_t ch)
 {
     const lcd_font_t *f = (const lcd_font_t *)self;
 
+#ifdef CONFIG_LCD_FONT_EXTENDED_ASCII
     // 大于，非法的码
     if (ch > 255)
     {
         return NULL;
     }
+#else 
+    // 大于，非法的码
+    if (ch > 127)
+    {
+        return NULL;
+    }
+#endif 
 
     // 看看结束数据是否还在数据内
     int end = ((ch + 1) * f->code_size) - 1;
@@ -83,11 +91,31 @@ const uint8_t *lcd_font_get_ascii_number_code(const void *self, uint32_t ch)
 }
 
 
+#if CONFIG_LCD_FONT_ASCII_8X8
+#include "fonts/font_8x8.c"
+#endif // CONFIG_LCD_FONT_ASCII_8X8
+
+#if CONFIG_LCD_FONT_ASCII_8X16
+#include "fonts/font_8x16.c"
+#endif // CONFIG_LCD_FONT_ASCII_8X16
+
+#if CONFIG_LCD_FONT_ASCII_10X18
+#include "fonts/font_10x18.c"
+#endif // CONFIG_LCD_FONT_ASCII_10X18
+
+#if CONFIG_LCD_FONT_SUN_ASCII_12X22
+#include "fonts/font_sun_12x22.c"
+#endif // CONFIG_LCD_FONT_SUN_ASCII_12X22   
+
+#if CONFIG_LCD_FONT_TER_ASCII_16X32
+#include "fonts/font_ter_16x32.c"
+#endif // CONFIG_LCD_FONT_TER_ASCII_16X32
+
 #if CONFIG_LCD_FONT_ACORN_ASCII_8X8
-#include "fonts/lcd_font_acorn_8x8.h"
+#include "fonts/font_acorn_8x8.c"
 #endif // CONFIG_LCD_FONT_ACORN_ASCII_8X8
 
 #if CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48
-#include "fonts/lcd_font_console_number_32x48.h"
+#include "fonts/font_console_number_32x48.c"
 #endif // CONFIG_LCD_FONT_CONSOLE_NUMBER_32X48
 

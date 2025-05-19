@@ -166,45 +166,61 @@ void app_main(void)
     //lcd_fill(lcd, 0x00);
 
     // 显示一个字符串
-    lcd_display_string(lcd, 0, 0, "Hello, World!", LCD_FONT(acorn_ascii_8x8), true);
+    //lcd_display_string(lcd, 0, 0, "Hello,World!", LCD_FONT(ascii_8x8), true);
 
-    // 显示一个数字
-    const char *text = "1234567890";
-    int x_pos = 0;
-    int y_pos = 16;
-    int text_width = strlen(text) * 8;  // 假设每个字符宽度为8像素
-    int text_height = 8;                // 字体高度为8像素
-    bool to_right = true;
+
+    // 显示一个字符串
+    lcd_display_string(lcd, 0, 0, "Hello,World!", LCD_FONT(ascii_8x16), true);
+
+    // 显示一个字符串
+    //lcd_display_string(lcd, 0, 18, "Hello,World!", LCD_FONT(ascii_10x18), true);
+
+    // 显示一个字符串
+    //lcd_display_string(lcd, 0, 38, "Hello,World!", LCD_FONT(sun_ascii_12x22), true);
+
+    lcd_display_string(lcd, 0, 18, "Hello,World!", LCD_FONT(ter_ascii_16x32), true);
 
     while (1) {
-        // 显示新的文字
-        lcd_display_string(lcd, x_pos, y_pos, text, LCD_FONT(acorn_ascii_8x8), true);
-        
-        // 延时1秒
-        mdelay(500);
-
-        // 清除当前位置的文字
-        lcd_clear_area(lcd, x_pos, y_pos, text_width, text_height);
-        //lcd_refresh(lcd);  // 刷新显示
-
-        // 更新位置
-        if (to_right) {
-            if(x_pos >= 128 - text_width) { // 如果到达屏幕边缘,开始向左移动
-                to_right = false;
-            } else {
-                x_pos += 8;
-            }
-        } else {            
-            if(x_pos <= 0) { // 如果到达屏幕边缘,开始向右移动
-                to_right = true;
-            } else {
-                x_pos -= 8;
-            }
-        }
-
-        // 显示按键点击计数
-        char count_str[10];
-        sprintf(count_str, "<%lu>", s_button_click_count);
-        lcd_display_string(lcd, 40, 32, count_str, LCD_FONT(acorn_ascii_8x8), false);
+        mdelay(1000);
     }
+
+    // // 显示一个数字
+    // const char *text = "1234567890";
+    // int x_pos = 0;
+    // int y_pos = 16;
+    // int text_width = strlen(text) * 8;  // 假设每个字符宽度为8像素
+    // int text_height = 8;                // 字体高度为8像素
+    // bool to_right = true;
+
+    // while (1) {
+    //     // 显示新的文字
+    //     lcd_display_string(lcd, x_pos, y_pos, text, LCD_FONT(acorn_ascii_8x8), true);
+        
+    //     // 延时1秒
+    //     mdelay(500);
+
+    //     // 清除当前位置的文字
+    //     lcd_clear_area(lcd, x_pos, y_pos, text_width, text_height);
+    //     //lcd_refresh(lcd);  // 刷新显示
+
+    //     // 更新位置
+    //     if (to_right) {
+    //         if(x_pos >= 128 - text_width) { // 如果到达屏幕边缘,开始向左移动
+    //             to_right = false;
+    //         } else {
+    //             x_pos += 8;
+    //         }
+    //     } else {            
+    //         if(x_pos <= 0) { // 如果到达屏幕边缘,开始向右移动
+    //             to_right = true;
+    //         } else {
+    //             x_pos -= 8;
+    //         }
+    //     }
+
+    //     // // 显示按键点击计数
+    //     // char count_str[10];
+    //     // sprintf(count_str, "<%lu>", s_button_click_count);
+    //     // lcd_display_string(lcd, 40, 32, count_str, LCD_FONT(acorn_ascii_8x8), false);
+    // }
 }
