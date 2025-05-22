@@ -21,10 +21,7 @@
 
 #include "bus_manager.h"
 
-#include "lcd_driver.h"
-#include "lcd_display.h"
-#include "lcd_models.h"
-#include "lcd_fonts.h"
+#include "display.h" // 使用新的显示模块
 
 #include "esp_log.h"
 
@@ -32,6 +29,9 @@ static const char *TAG = "main";
 
 /// 按键点击计数
 static uint32_t s_button_click_count = 0;
+
+// 当前信号显示等级
+static uint8_t s_current_signal_level = 4;
 
 enum GPIO_IDS {
     GPIO_SYS_LED = 0,
@@ -68,6 +68,10 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
             break; 
         case EXT_GPIO_EVENT_BUTTON_RELEASED:
             ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);
+            
+            // 轮流显示不同的信号图标
+            s_current_signal_level = (s_current_signal_level + 1) % 5; // 0-4循环
+            display_signal_level(s_current_signal_level);
             break;
             
         case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
@@ -93,17 +97,6 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
             break;
     }
 }
-
-// 定义一个SPI的OLED驱动
-//LCD_DEFINE_DRIVER_GPIO_SPI(gpio_spi, GPIO_NUM_10, GPIO_NUM_9, GPIO_NUM_12, GPIO_NUM_11, -1);
-
-// 定义一个I2C的OLED驱动
-LCD_DEFINE_DRIVER_I2C(i2c, BUS_I2C0, 0x3C);
-
-// 定义一个SSD1312的OLED显示模型
-LCD_DEFINE_SSD1312_128X64(ssd1312);
-
-
 
 void app_main(void)
 {
@@ -158,69 +151,21 @@ void app_main(void)
         return;
     }
 
-    // 创建一个OLED显示器
-    lcd_handle_t lcd = lcd_display_create(LCD_DRIVER(i2c), LCD_MODEL(ssd1312), LCD_ROTATION_0, NULL, 0);
+    // 初始化显示模块
+    lcd_handle_t lcd = display_init();
+    if (lcd == NULL) {
+        ESP_LOGE(TAG, "Failed to initialize display");
+        return;
+    }
 
-    lcd_startup(lcd);
-
-    //lcd_fill(lcd, 0x00);
-
-    // 显示一个字符串
-    //lcd_display_string(lcd, 0, 0, "Hello,World!", LCD_FONT(ascii_8x8), true);
-
-
-    // 显示一个字符串
-    lcd_display_string(lcd, 0, 0, "Hello,World!", LCD_FONT(ascii_8x16), true);
-
-    // 显示一个字符串
-    //lcd_display_string(lcd, 0, 18, "Hello,World!", LCD_FONT(ascii_10x18), true);
-
-    // 显示一个字符串
-    //lcd_display_string(lcd, 0, 38, "Hello,World!", LCD_FONT(sun_ascii_12x22), true);
-
-    lcd_display_string(lcd, 0, 18, "Hello,World!", LCD_FONT(ter_ascii_16x32), true);
+    // 启动显示任务
+    ret = display_task_start(lcd);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start display task: %s", esp_err_to_name(ret));
+        return;
+    }
 
     while (1) {
         mdelay(1000);
     }
-
-    // // 显示一个数字
-    // const char *text = "1234567890";
-    // int x_pos = 0;
-    // int y_pos = 16;
-    // int text_width = strlen(text) * 8;  // 假设每个字符宽度为8像素
-    // int text_height = 8;                // 字体高度为8像素
-    // bool to_right = true;
-
-    // while (1) {
-    //     // 显示新的文字
-    //     lcd_display_string(lcd, x_pos, y_pos, text, LCD_FONT(acorn_ascii_8x8), true);
-        
-    //     // 延时1秒
-    //     mdelay(500);
-
-    //     // 清除当前位置的文字
-    //     lcd_clear_area(lcd, x_pos, y_pos, text_width, text_height);
-    //     //lcd_refresh(lcd);  // 刷新显示
-
-    //     // 更新位置
-    //     if (to_right) {
-    //         if(x_pos >= 128 - text_width) { // 如果到达屏幕边缘,开始向左移动
-    //             to_right = false;
-    //         } else {
-    //             x_pos += 8;
-    //         }
-    //     } else {            
-    //         if(x_pos <= 0) { // 如果到达屏幕边缘,开始向右移动
-    //             to_right = true;
-    //         } else {
-    //             x_pos -= 8;
-    //         }
-    //     }
-
-    //     // // 显示按键点击计数
-    //     // char count_str[10];
-    //     // sprintf(count_str, "<%lu>", s_button_click_count);
-    //     // lcd_display_string(lcd, 40, 32, count_str, LCD_FONT(acorn_ascii_8x8), false);
-    // }
 }

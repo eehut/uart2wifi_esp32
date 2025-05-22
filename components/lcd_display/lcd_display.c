@@ -13,6 +13,7 @@
 #include "lcd_driver.h"
 #include "esp_log.h"
 #include "lcd_fonts.h"
+#include "lcd_img.h"
 #include "uptime.h"
 #include <stdint.h>
 
@@ -444,7 +445,7 @@ static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8
 
 
 /**
- * @brief 查找字库并显示，较底层函数，不考虑能否显示。
+ * @brief 查找字库并显示，较底层函数，支持部分显示。
  * 
  * @param disp disp handle
  * @param x 
@@ -452,43 +453,90 @@ static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8
  * @param ch 
  * @param font 
  * @param refresh 
+ * @return int 返回实际显示的像素宽度
  */
-void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh)
+int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;    
     int data_index = 0;
+    int displayed_width = 0;
 
     if (font == NULL)
     {
         ESP_LOGE(TAG, "No font specified!!");
-        return ;
+        return 0;
     }
 
     const uint8_t *font_code = font->get_code_data(font, ch);
     if (font_code == NULL)
     {
         ESP_LOGE(TAG, "Unabled to find font data of %06x", ch);
-        return ;
+        return 0;
     }
 
-    // 根据字体的宽度和大小设置显存位
-    for (int h = 0; h < font->height; h ++)
+    // 检查是否完全在屏幕外
+    if (x >= lcd->xsize || y >= lcd->ysize || x + font->width <= 0 || y + font->height <= 0)
     {
+        return 0;
+    }
+
+    // 计算实际可显示的区域
+    int start_x = (x < 0) ? 0 : x;
+    int start_y = (y < 0) ? 0 : y;
+    int end_x = (x + font->width > lcd->xsize) ? lcd->xsize : x + font->width;
+    int end_y = (y + font->height > lcd->ysize) ? lcd->ysize : y + font->height;
+    
+    displayed_width = end_x - start_x;
+
+    // 根据字体的宽度和大小设置显存位
+    for (int h = 0; h < font->height; h++)
+    {
+        // 跳过屏幕外的垂直行
+        if (y + h < start_y || y + h >= end_y)
+        {
+            data_index += (font->width + 7) / 8;  // 跳过这一行的字体数据
+            continue;
+        }
+
         // 算出字库一行有多少个字节，注意字宽度不为8的整数时
         int left_bits = font->width;
-        int byte_index = 0;
+        //int byte_index = 0;
+        int x_offset = 0;  // 用于跟踪水平方向的偏移
 
         while (left_bits > 0)
         {
             // 拿到第一个字节的数据，根据宽度处理数据
             int fbits = (left_bits > 8) ? 8 : left_bits;
-            uint8_t fdata = font_code[data_index ++];
+            uint8_t fdata = font_code[data_index++];
 
-            // // 如果最后一个字节宽度小于8，一般是低位为无效位
-            _set_dram_bits(lcd, x + byte_index * 8, y + h, fdata, fbits);
+            // 检查当前8像素组是否在显示范围内
+            if (x + x_offset + 8 > start_x && x + x_offset < end_x)
+            {
+                // 计算需要显示的位数
+                int display_start = (x + x_offset < start_x) ? start_x - (x + x_offset) : 0;
+                int display_end = (x + x_offset + fbits > end_x) ? end_x - (x + x_offset) : fbits;
+                
+                if (display_end > display_start)
+                {
+                    // 调整数据，只显示可见部分
+                    uint8_t adjusted_data = fdata;
+                    if (display_start > 0)
+                    {
+                        adjusted_data &= (0xFF >> display_start);
+                    }
+                    if (display_end < 8)
+                    {
+                        adjusted_data &= (0xFF << (8 - display_end));
+                    }
+                    
+                    _set_dram_bits(lcd, x + x_offset + display_start, y + h, 
+                                 adjusted_data << display_start, display_end - display_start);
+                }
+            }
 
             left_bits -= fbits;
-            byte_index ++;
+            //byte_index++;
+            x_offset += 8;
         }
     }
 
@@ -497,11 +545,13 @@ void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t 
     {
         lcd_refresh(disp);
     }
+
+    return displayed_width;
 }
 
 
 /**
- * @brief 显示一串文本， 这是一个比较底层的函数，如果显示内容超出所在行，不显示, 暂不支持非ASCII字串
+ * @brief 显示一串文本，支持部分显示。如果字符超出显示区域，会显示能显示的部分
  * 
  * @param disp 
  * @param x 显示位置X, 水平方向, 从左到右
@@ -510,27 +560,40 @@ void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t 
  * @param font 字体
  * @param refresh 是否刷新 
  * 
- * @return int 返回显示的数量
+ * @return int 返回显示的字符数量
  */
 int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool refresh)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;       
     const char *ch = text;     
     int count = 0;
+    int current_x = x;
 
-    // 先看看y的位置是否足够显示 
-    if ((lcd->ysize - y) < font->height)
+    if (!text || !font)
     {
         return count;
     }
 
-    // 看看剩余空间能否显示该字体
-    while (*ch && ((lcd->xsize - x) >= font->width))
+    // 如果起始位置完全在屏幕下方，直接返回
+    if (y >= lcd->ysize)
     {
-        lcd_display_char(disp, x, y, *ch, font, false);    
-        ch ++;
-        x += font->width;
-        count ++;
+        return count;
+    }
+
+    // 显示每个字符，即使只能部分显示
+    while (*ch)
+    {
+        int width = lcd_display_char(disp, current_x, y, *ch, font, false);
+        if (width > 0)
+        {
+            count++;
+            current_x += font->width;  // 仍然使用完整字体宽度移动位置
+        }
+        else if (current_x >= lcd->xsize)  // 如果已经完全超出右边界
+        {
+            break;
+        }
+        ch++;
     }
 
     if (refresh)
@@ -541,7 +604,296 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
     return count;
 }
 
+/**
+ * @brief 显示单色位图，支持部分显示
+ * 
+ * @param disp 显示对象 
+ * @param x 显示位置X
+ * @param y 显示位置Y
+ * @param img 位图对象
+ * @param refresh 是否刷新
+ * 
+ * @return int 返回实际显示的像素宽度，如果完全不可见则返回0
+ */
+int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *img, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;    
+    int displayed_width = 0;
 
+    if (!lcd || !img || !img->data)
+    {
+        ESP_LOGE(TAG, "Invalid parameters for mono image display");
+        return 0;
+    }
+
+    // 检查是否完全在屏幕外
+    if (x >= lcd->xsize || y >= lcd->ysize || 
+        x + img->width <= 0 || y + img->height <= 0)
+    {
+        return 0;
+    }
+
+    // 计算实际可显示的区域
+    int start_x = (x < 0) ? 0 : x;
+    int start_y = (y < 0) ? 0 : y;
+    int end_x = (x + img->width > lcd->xsize) ? lcd->xsize : x + img->width;
+    int end_y = (y + img->height > lcd->ysize) ? lcd->ysize : y + img->height;
+    
+    displayed_width = end_x - start_x;
+
+    // 遍历图像的每一行
+    for (int h = 0; h < img->height; h++)
+    {
+        // 跳过屏幕外的垂直行
+        if (y + h < start_y || y + h >= end_y)
+        {
+            continue;
+        }
+
+        // 计算当前行在图像数据中的起始位置
+        // 每行的字节数 = (图像宽度 + 7) / 8
+        int row_bytes = (img->width + 7) / 8;
+        int row_offset = h * row_bytes;
+        int x_offset = 0;  // 用于跟踪水平方向的偏移
+
+        // 处理这一行的所有字节
+        for (int byte_idx = 0; byte_idx < row_bytes; byte_idx++)
+        {
+            uint8_t img_byte = img->data[row_offset + byte_idx];
+            int bits_in_byte = (byte_idx == row_bytes - 1 && img->width % 8) ? 
+                              (img->width % 8) : 8;
+
+            // 检查当前8像素组是否在显示范围内
+            if (x + x_offset + 8 > start_x && x + x_offset < end_x)
+            {
+                // 计算需要显示的位数
+                int display_start = (x + x_offset < start_x) ? start_x - (x + x_offset) : 0;
+                int display_end = (x + x_offset + bits_in_byte > end_x) ? 
+                                end_x - (x + x_offset) : bits_in_byte;
+                
+                if (display_end > display_start)
+                {
+                    // 调整数据，只显示可见部分
+                    uint8_t adjusted_data = img_byte;
+                    if (display_start > 0)
+                    {
+                        adjusted_data &= (0xFF >> display_start);
+                    }
+                    if (display_end < 8)
+                    {
+                        adjusted_data &= (0xFF << (8 - display_end));
+                    }
+                    
+                    _set_dram_bits(lcd, x + x_offset + display_start, y + h, 
+                                 adjusted_data << display_start, display_end - display_start);
+                }
+            }
+            x_offset += 8;
+        }
+    }
+
+    if (refresh)
+    {
+        lcd_refresh(disp);
+    }
+    
+    return displayed_width;
+}
+
+/**
+ * @brief 绘制垂直线
+ * 
+ * @param disp LCD显示句柄
+ * @param x 起始x坐标
+ * @param y 起始y坐标
+ * @param length 线的长度(垂直方向)
+ * @param width 线宽(水平方向)
+ * @param refresh 是否立即刷新屏幕
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+    
+    if (!lcd || width <= 0 || length <= 0) {
+        return -1;
+    }
+    
+    // 检查是否完全在屏幕外
+    if (x >= lcd->xsize || y >= lcd->ysize || x + width <= 0 || y + length <= 0) {
+        return -1;
+    }
+    
+    ESP_LOGD(TAG, "draw vertical line @(%d,%d), length=%d, width=%d", x, y, length, width);
+
+    // 限制在屏幕范围内
+    int start_x = (x < 0) ? 0 : x;
+    int start_y = (y < 0) ? 0 : y;
+    int end_x = (x + width > lcd->xsize) ? lcd->xsize : x + width;
+    int end_y = (y + length > lcd->ysize) ? lcd->ysize : y + length;
+    
+    // 实际绘制的宽度
+    int actual_width = end_x - start_x;
+    int actual_length = end_y - start_y;
+    
+    ESP_LOGD(TAG, "actual width=%d, actual length=%d", actual_width, actual_length);
+
+    // 在垂直方向上逐像素绘制
+    for (int curr_y = start_y; curr_y < end_y; curr_y++) {
+        // 在水平方向上设置宽度
+        for (int i = 0; i < actual_width; i++) {
+            // 计算内存中的位偏移
+            int offs = (curr_y * lcd->xsize + (start_x + i));
+            // 设置对应位为1
+            lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+        }
+    }
+    
+    if (refresh) {
+        lcd_refresh(disp);
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief 绘制水平线
+ * 
+ * @param disp LCD显示句柄
+ * @param x 起始x坐标
+ * @param y 起始y坐标
+ * @param length 线的长度(水平方向)
+ * @param width 线宽(垂直方向)
+ * @param refresh 是否立即刷新屏幕
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+    
+    if (!lcd || width <= 0 || length <= 0) {
+        return -1;
+    }
+    
+    // 检查是否完全在屏幕外
+    if (x >= lcd->xsize || y >= lcd->ysize || x + length <= 0 || y + width <= 0) {
+        return -1;
+    }
+
+    ESP_LOGD(TAG, "draw horizontal line @(%d,%d), length=%d, width=%d", x, y, length, width);
+    
+    // 限制在屏幕范围内
+    int start_x = (x < 0) ? 0 : x;
+    int start_y = (y < 0) ? 0 : y;
+    int end_x = (x + length > lcd->xsize) ? lcd->xsize : x + length;
+    int end_y = (y + width > lcd->ysize) ? lcd->ysize : y + width;
+    
+    // 实际绘制的宽度和长度
+    int actual_width = end_y - start_y;
+    int actual_length = end_x - start_x;
+
+    ESP_LOGD(TAG, "actual width=%d, actual length=%d", actual_width, actual_length);
+    
+    // 在垂直方向上设置线宽
+    for (int curr_y = start_y; curr_y < end_y; curr_y++) {
+        // 在水平方向上设置长度
+        for (int curr_x = start_x; curr_x < end_x; curr_x++) {
+            // 计算内存中的位偏移
+            int offs = (curr_y * lcd->xsize + curr_x);
+            // 设置对应位为1
+            lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+        }
+    }
+    
+    if (refresh) {
+        lcd_refresh(disp);
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief 绘制矩形
+ * 
+ * @param disp LCD显示句柄
+ * @param start_x 左上角x坐标
+ * @param start_y 左上角y坐标
+ * @param end_x 右下角x坐标
+ * @param end_y 右下角y坐标
+ * @param width 边框宽度
+ * @param refresh 是否立即刷新屏幕
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+    
+    if (!lcd || width <= 0) {
+        return -1;
+    }
+    
+    // 确保起点和终点顺序正确
+    if (start_x > end_x) {
+        int temp = start_x;
+        start_x = end_x;
+        end_x = temp;
+    }
+    
+    if (start_y > end_y) {
+        int temp = start_y;
+        start_y = end_y;
+        end_y = temp;
+    }
+
+    ESP_LOGD(TAG, "draw rectangle @(%d,%d), end_x=%d, end_y=%d, width=%d", start_x, start_y, end_x, end_y, width);
+    
+    // 计算矩形宽高
+    int rect_width = end_x - start_x + 1;
+    int rect_height = end_y - start_y + 1;
+    
+    // 检查是否是有效的矩形
+    if (rect_width <= 0 || rect_height <= 0) {
+        return -1;
+    }
+    
+    // 如果线宽超过矩形尺寸的一半，就填充整个矩形
+    if (width * 2 >= rect_width || width * 2 >= rect_height) {
+        // 填充整个矩形区域
+        for (int y = start_y; y <= end_y; y++) {
+            for (int x = start_x; x <= end_x; x++) {
+                int offs = (y * lcd->xsize + x);
+                lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+            }
+        }
+    } else {
+        // 绘制四条边
+        // 上边
+        lcd_draw_horizontal_line(disp, start_x, start_y, rect_width, width, false);
+        // 下边
+        lcd_draw_horizontal_line(disp, start_x, end_y - width + 1, rect_width, width, false);
+        // 左边
+        lcd_draw_vertical_line(disp, start_x, start_y, rect_height, width, false);
+        // 右边
+        lcd_draw_vertical_line(disp, end_x - width + 1, start_y, rect_height, width, false);
+    }
+    
+    if (refresh) {
+        lcd_refresh(disp);
+    }
+    
+    return 0;
+}
+
+/**
+ * @brief 清除指定区域的显示内容
+ * 
+ * @param disp LCD显示句柄
+ * @param x 起始x坐标
+ * @param y 起始y坐标
+ * @param width 要清除的宽度(像素)
+ * @param height 要清除的高度(像素)
+ * @return int 成功返回0，失败返回-1
+ */
 int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;    

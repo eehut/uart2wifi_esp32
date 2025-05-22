@@ -5,9 +5,21 @@
 extern "C" {
 #endif
 
+/**
+ * @file lcd_display.h
+ * @author Samuel (samuel@neptune-robotics.com)
+ * @brief LCD显示驱动
+ * @version 0.1
+ * @date 2025-05-22
+ * 
+ * @copyright Copyright (c) 2025
+ * 
+ */
+
 #include "lcd_driver.h"
 #include "lcd_models.h"
 #include "lcd_fonts.h"
+#include "lcd_img.h"
 #include <string.h>
 
 // 旋转角度
@@ -66,32 +78,45 @@ void lcd_startup(lcd_handle_t disp);
  */
 void lcd_fill(lcd_handle_t disp, uint8_t data);
 
-
 /**
- * @brief 查找字库并显示，较底层函数，不考虑能否显示。
+ * @brief 显示单个字符，支持部分显示
  * 
- * @param disp disp handle
- * @param x 
- * @param y 
- * @param ch 
- * @param font 
- * @param refresh 
+ * @param disp LCD显示句柄
+ * @param x X坐标
+ * @param y Y坐标
+ * @param ch 要显示的字符
+ * @param font 字体
+ * @param refresh 是否立即刷新
+ * @return int 返回实际显示的像素宽度，如果完全不可见则返回0
  */
-void lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh);
+int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh);
 
 /**
- * @brief 显示一串文本， 这是一个比较底层的函数，如果显示内容超出所在行，不显示, 暂不支持非ASCII字串
+ * @brief 显示一串文本，支持部分显示。如果字符超出显示区域，会显示能显示的部分
  * 
  * @param disp 
- * @param x 显示位置X
- * @param y 显示位置Y
+ * @param x 显示位置X, 水平方向, 从左到右
+ * @param y 显示位置Y, 垂直方向, 从上到下
  * @param text 需要显示的文本
  * @param font 字体
  * @param refresh 是否刷新 
  * 
- * @return int 返回显示的数量
+ * @return int 返回显示的字符数量
  */
 int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool refresh);
+
+/**
+ * @brief 显示单色位图，支持部分显示
+ * 
+ * @param disp 显示对象 
+ * @param x 显示位置X
+ * @param y 显示位置Y
+ * @param img 位图对象
+ * @param refresh 是否刷新
+ * 
+ * @return int 返回实际显示的像素宽度，如果完全不可见则返回0
+ */
+int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *img, bool refresh);
 
 /**
  * @brief 清除指定区域的显示内容
@@ -104,6 +129,48 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
  * @return int 成功返回0，失败返回-1
  */
 int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height);
+
+
+/**
+ * @brief 绘制垂直线
+ * 
+ * @param disp 
+ * @param x 
+ * @param y 
+ * @param length 线的长度(垂直方向)
+ * @param width 线宽(水平方向)
+ * @param refresh 是否刷新
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh);
+
+/**
+ * @brief 绘制水平线
+ * 
+ * @param disp 
+ * @param x 
+ * @param y 
+ * @param length 线的长度(水平方向)
+ * @param width 线宽(垂直方向)
+ * @param refresh 是否刷新
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh);
+
+/**
+ * @brief 绘制矩形
+ * 
+ * @param disp 
+ * @param start_x 起始x坐标
+ * @param start_y 起始y坐标
+ * @param end_x 结束x坐标
+ * @param end_y 结束y坐标
+ * @param width 线宽
+ * @param refresh 是否刷新
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool refresh);
+
 
 #ifdef __cplusplus
 }

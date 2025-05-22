@@ -1,4 +1,4 @@
-idf_component_register(SRCS "serial2ip_esp32.c"
+idf_component_register(SRCS "display.c" "img_icons.c" "serial2ip_esp32.c"
                     INCLUDE_DIRS "."
                     REQUIRES driver esp_common uptime ext_gpio app_event_loop bus_manager lcd_font lcd_display)
 
