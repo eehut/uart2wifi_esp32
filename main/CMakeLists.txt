@@ -1,15 +1,8 @@
 
-idf_component_register(SRCS "app_main.c" "display.c" "img_icons.c" "cli_menu.c" 
-                    INCLUDE_DIRS "."
+idf_component_register(SRCS "board.c" "app_main.c" "display.c" "img_icons.c" "cli_menu.c" 
+                    INCLUDE_DIRS "include"
                     REQUIRES driver esp_common nvs_flash uptime ext_gpio app_event_loop bus_manager lcd_font lcd_display wifi_station)
 
-#idf_component_register(SRCS "app_main_test_wifi_station.c"
-#                    INCLUDE_DIRS "."
-#                    REQUIRES driver esp_common nvs_flash uptime ext_gpio wifi_station)
-
-#idf_component_register(SRCS "cli_menu.c" "app_main_test_wifi_cli.c"
-#                    INCLUDE_DIRS "."
-#                    REQUIRES driver esp_common nvs_flash uptime ext_gpio wifi_station)
 
 # 为ext_gpio组件设置编译宏
 idf_component_get_property(ext_gpio ext_gpio COMPONENT_LIB)

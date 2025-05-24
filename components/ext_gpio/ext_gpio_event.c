@@ -6,7 +6,7 @@
 #include "app_event_loop.h"
 #include "esp_log.h"
 
-static const char *TAG = "ext-gpio-event";
+static const char *TAG = "ext_gpio_event";
 
 // 定义事件基础
 ESP_EVENT_DEFINE_BASE(EXT_GPIO_EVENTS);

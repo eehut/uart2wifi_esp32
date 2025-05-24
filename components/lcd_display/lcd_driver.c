@@ -17,7 +17,7 @@
 #include "bus_manager.h"
 #include <stdint.h>
 
-static const char *TAG = "lcd-driver";
+static const char *TAG = "lcd_driver";
 
 // 定义最大支持的LCD实例数
 #ifndef CONFIG_LCD_MAX_I2C_DRIVER_NUM

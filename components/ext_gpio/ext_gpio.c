@@ -20,7 +20,7 @@
 
 #include "esp_log.h"
 
-static const char *TAG = "ext-gpio";
+static const char *TAG = "ext_gpio";
 
 /**
  * @brief 工作周期，单位为毫秒
@@ -250,7 +250,7 @@ static gpio_manipulate_t * _gpio_instance(uint16_t id)
 
 
 /**
- * @brief configure the ext-gpios, can be called in multiple times
+ * @brief configure the ext_gpios, can be called in multiple times
  * 
  * @param configs configs array of ext_gpio_config_t
  * @param num number of configs

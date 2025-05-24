@@ -45,7 +45,7 @@ extern "C" {
 
 
 /**
- * @brief configure the ext-gpios, can be called in multiple times
+ * @brief configure the ext_gpios, can be called in multiple times
  * 
  * @param configs configs array of ext_gpio_config_t
  * @param num number of configs

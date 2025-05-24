@@ -17,7 +17,7 @@
 #include "uptime.h"
 #include <stdint.h>
 
-static const char *TAG = "lcd-driver";
+static const char *TAG = "lcd_driver";
 
 /**
  * @brief OLED显示适配

@@ -8,13 +8,14 @@
 #include "display.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_log_config.h"
 #include "lcd_driver.h"
 #include "lcd_display.h"
 #include "lcd_models.h"
 #include "lcd_fonts.h"
 #include "img_icons.h"
-#include "bus_manager.h"
+#include "ext_gpio.h"
+#include "export_ids.h"
+#include "app_event_loop.h"
 
 static const char *TAG = "display";
 
@@ -45,6 +46,9 @@ static TaskHandle_t s_display_task_handle = NULL;
 // 显示屏句柄
 static lcd_handle_t s_lcd_handle = NULL;
 
+// 当前信号等级
+static uint8_t s_current_signal_level = 0;
+
 // 动画状态
 static struct {
     uint8_t eraser_position;         // 擦除点的当前位置
@@ -56,6 +60,60 @@ static void display_task(void *arg);
 
 // 绘制带动画效果的水平线
 static void draw_animated_line(lcd_handle_t lcd, bool refresh);
+
+
+/**s
+ * @brief 按键事件处理函数
+ * 
+ * @param handler_args 处理函数参数
+ * @param base 事件基础
+ * @param id 事件ID
+ * @param event_data 事件数据
+ */
+static void button_event_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data)
+{
+    ext_gpio_event_data_t* data = (ext_gpio_event_data_t*)event_data;
+
+    if (data->gpio_id != GPIO_BUTTON) {
+        return;
+    }
+    
+    // 根据事件类型进行不同处理
+    switch(id) {
+        case EXT_GPIO_EVENT_BUTTON_PRESSED:
+            ESP_LOGI(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
+            break; 
+        case EXT_GPIO_EVENT_BUTTON_RELEASED:
+            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);
+            
+            // 轮流显示不同的信号图标
+            s_current_signal_level = (s_current_signal_level + 1) % 5; // 0-4循环
+            display_signal_level(s_current_signal_level);
+            break;
+            
+        case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
+            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);
+            
+            // 长按时设置LED闪烁
+            if (data->gpio_id == GPIO_BUTTON && data->data.button.long_pressed == 3) {
+                ext_led_flash(GPIO_SYS_LED, 0x0003, 0xFFFF);
+            }
+            break;
+            
+        case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
+            ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
+
+            // 双击时改变LED闪烁模式
+            if (data->gpio_id == GPIO_BUTTON && data->data.button.click_count == 2) {
+                ext_led_flash(GPIO_SYS_LED, 0x333, 0xFFF);
+            }
+            // 三击时改变LED闪烁模式
+            else if (data->gpio_id == GPIO_BUTTON && data->data.button.click_count == 3) {
+                ext_led_flash(GPIO_SYS_LED, 0x03F, 0xFFF);
+            }
+            break;
+    }
+}
 
 /**
  * @brief 初始化显示模块
@@ -88,6 +146,9 @@ lcd_handle_t display_init(void)
 
     // 显示IP地址
     display_ip_address("192.168.1.1");
+
+    // 注册按键事件处理函数
+    app_event_handler_register(EXT_GPIO_EVENTS, ESP_EVENT_ANY_ID, button_event_handler, NULL);
     
     ESP_LOGI(TAG, "Display module initialized");
     
