@@ -25,7 +25,7 @@
 
 #include "esp_log.h"
 
-static const char *TAG = "main";
+static const char *TAG = "app_main";
 
 /// 按键点击计数
 static uint32_t s_button_click_count = 0;
