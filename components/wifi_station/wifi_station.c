@@ -1,3 +1,14 @@
+/**
+ * @file wifi_station.c
+ * @author LiuChuansen (179712066@qq.com)
+ * @brief WiFi Station 组件
+ * @version 0.1
+ * @date 2025-05-24
+ * 
+ * @copyright Copyright (c) 2025
+ * 
+ */
+
 #include "wifi_station.h"
 #include <string.h>
 #include <stdio.h>
@@ -15,6 +26,8 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include <inttypes.h>
+
 static const char *TAG = "wifi_station";
 
 // NVS命名空间
@@ -28,7 +41,10 @@ static const char *TAG = "wifi_station";
 // 组件状态
 typedef struct {
     bool initialized;
-    wifi_station_status_t status;
+    bool auto_connect_enabled;
+    bool auto_connect_one_shot;
+    TickType_t next_scan_time;
+    wifi_station_state_t state;
     char current_ssid[WIFI_STATION_SSID_LEN];
     uint8_t current_bssid[WIFI_STATION_BSSID_LEN];
     int8_t current_rssi;
@@ -53,7 +69,7 @@ static esp_err_t save_records_to_nvs(void);
 static esp_err_t load_sequence_from_nvs(void);
 static esp_err_t save_sequence_to_nvs(void);
 static int find_best_network(wifi_ap_record_t *ap_list, uint16_t ap_count);
-static void add_or_update_record_internal(const char *ssid, const char *password);
+static void add_or_update_record_internal(const char *ssid, const char *password, bool ever_success);
 
 esp_err_t wifi_station_init(void)
 {
@@ -99,7 +115,9 @@ esp_err_t wifi_station_init(void)
     load_sequence_from_nvs();
     load_records_from_nvs();
 
-    s_wifi_ctx.status = WIFI_STATION_STATUS_DISCONNECTED;
+    s_wifi_ctx.state = WIFI_STATE_DISCONNECTED;
+    s_wifi_ctx.auto_connect_enabled = true;  // 默认启用后台扫描
+    s_wifi_ctx.auto_connect_one_shot = false;  // 默认不启用一次自动连接
     s_wifi_ctx.initialized = true;
 
     // 创建后台任务
@@ -109,6 +127,9 @@ esp_err_t wifi_station_init(void)
         wifi_station_deinit();
         return ESP_ERR_NO_MEM;
     }
+
+    // 设置1秒后开始扫描并连接
+    s_wifi_ctx.next_scan_time = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
 
     ESP_LOGI(TAG, "WiFi station initialized successfully");
     return ESP_OK;
@@ -162,9 +183,9 @@ esp_err_t wifi_station_get_status(wifi_connection_status_t *status)
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
 
     memset(status, 0, sizeof(wifi_connection_status_t));
-    status->status = s_wifi_ctx.status;
+    status->state = s_wifi_ctx.state;
     
-    if (s_wifi_ctx.status == WIFI_STATION_STATUS_CONNECTED) {
+    if (s_wifi_ctx.state == WIFI_STATE_CONNECTED) {
         strcpy(status->ssid, s_wifi_ctx.current_ssid);
         memcpy(status->bssid, s_wifi_ctx.current_bssid, WIFI_STATION_BSSID_LEN);
         status->rssi = s_wifi_ctx.current_rssi;
@@ -180,7 +201,10 @@ esp_err_t wifi_station_get_status(wifi_connection_status_t *status)
         // 获取DNS信息
         esp_netif_dns_info_t dns_info;
         if (esp_netif_get_dns_info(s_wifi_ctx.netif, ESP_NETIF_DNS_MAIN, &dns_info) == ESP_OK) {
-            status->dns = dns_info.ip.u_addr.ip4.addr;
+            status->dns1 = dns_info.ip.u_addr.ip4.addr;
+            if (esp_netif_get_dns_info(s_wifi_ctx.netif, ESP_NETIF_DNS_BACKUP, &dns_info) == ESP_OK) {
+                status->dns2 = dns_info.ip.u_addr.ip4.addr;
+            }
         }
 
         // 计算连接时长
@@ -255,8 +279,21 @@ esp_err_t wifi_station_disconnect(void)
     }
 
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-    s_wifi_ctx.status = WIFI_STATION_STATUS_DISCONNECTED;
+    s_wifi_ctx.state = WIFI_STATE_DISCONNECTED;
     s_wifi_ctx.connected_time = 0;
+    
+    // 设置当前SSID的user_disconnected标记
+    if (s_wifi_ctx.current_ssid[0] != '\0') {
+        for (int i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+            if (s_wifi_ctx.records[i].valid && 
+                strcmp(s_wifi_ctx.records[i].ssid, s_wifi_ctx.current_ssid) == 0) {
+                s_wifi_ctx.records[i].user_disconnected = true;
+                ESP_LOGI(TAG, "Marked SSID %s as user disconnected", s_wifi_ctx.current_ssid);
+                break;
+            }
+        }
+    }
+    
     memset(s_wifi_ctx.current_ssid, 0, sizeof(s_wifi_ctx.current_ssid));
     xSemaphoreGive(s_wifi_ctx.mutex);
 
@@ -281,6 +318,11 @@ esp_err_t wifi_station_connect(const char *ssid, const char *password)
     if (password && strlen(password) >= WIFI_STATION_PASSWORD_LEN) {
         return ESP_ERR_INVALID_ARG;
     }
+    // 如果WIFI已连接,则先断开连接 
+    if (s_wifi_ctx.state == WIFI_STATE_CONNECTED) {
+        ESP_LOGD(TAG, "WiFi is connected, disconnect first");
+        esp_wifi_disconnect();
+    }
 
     // 配置WiFi连接参数
     wifi_config_t wifi_config = {0};
@@ -290,8 +332,23 @@ esp_err_t wifi_station_connect(const char *ssid, const char *password)
     }
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
+    ESP_LOGD(TAG, "Started WiFi connection, ssid: %s, password: %s, authmode: %d", ssid, password ? password : "", wifi_config.sta.threshold.authmode);
+
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-    s_wifi_ctx.status = WIFI_STATION_STATUS_CONNECTING;
+    
+    // 清除user_disconnected标记
+    for (int i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+        if (s_wifi_ctx.records[i].valid && 
+            strcmp(s_wifi_ctx.records[i].ssid, ssid) == 0) {
+            if (s_wifi_ctx.records[i].user_disconnected) {
+                s_wifi_ctx.records[i].user_disconnected = false;
+                ESP_LOGI(TAG, "Cleared user disconnected flag for SSID %s", ssid);
+            }
+            break;
+        }
+    }
+    
+    s_wifi_ctx.state = WIFI_STATE_CONNECTING;
     s_wifi_ctx.connect_start_time = esp_log_timestamp() / 1000;
     strcpy(s_wifi_ctx.current_ssid, ssid);
     xSemaphoreGive(s_wifi_ctx.mutex);
@@ -312,33 +369,45 @@ esp_err_t wifi_station_connect(const char *ssid, const char *password)
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to WiFi: %s", ssid);
         // 自动添加或更新连接记录
-        add_or_update_record_internal(ssid, password ? password : "");
+        add_or_update_record_internal(ssid, password ? password : "", true);
         return ESP_OK;
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGE(TAG, "Failed to connect to WiFi: %s", ssid);
         xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-        s_wifi_ctx.status = WIFI_STATION_STATUS_DISCONNECTED;
+        s_wifi_ctx.state = WIFI_STATE_DISCONNECTED;
         xSemaphoreGive(s_wifi_ctx.mutex);
         return ESP_FAIL;
     } else {
         ESP_LOGE(TAG, "WiFi connection timeout: %s", ssid);
         esp_wifi_disconnect();
         xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-        s_wifi_ctx.status = WIFI_STATION_STATUS_DISCONNECTED;
+        s_wifi_ctx.state = WIFI_STATE_DISCONNECTED;
         xSemaphoreGive(s_wifi_ctx.mutex);
         return ESP_ERR_TIMEOUT;
     }
 }
 
-esp_err_t wifi_station_get_records(wifi_connection_record_t records[WIFI_STATION_MAX_RECORDS], uint8_t *count)
+esp_err_t wifi_station_get_records(wifi_connection_record_t *records, uint8_t *count)
 {
-    if (!s_wifi_ctx.initialized || !records || !count) {
+    if (!s_wifi_ctx.initialized || !records || !count || *count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    int return_limit = *count;
+    if (return_limit > s_wifi_ctx.record_count) {
+        return_limit = s_wifi_ctx.record_count;
+    }
+
+    int return_index = 0;
+
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-    memcpy(records, s_wifi_ctx.records, sizeof(s_wifi_ctx.records));
-    *count = s_wifi_ctx.record_count;
+    for (int i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+        if (s_wifi_ctx.records[i].valid && (return_index < return_limit)) {
+            records[return_index] = s_wifi_ctx.records[i];
+            return_index++;
+        }
+    }
+    *count = return_index;
     xSemaphoreGive(s_wifi_ctx.mutex);
 
     return ESP_OK;
@@ -353,9 +422,9 @@ esp_err_t wifi_station_delete_record(const char *ssid)
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
 
     bool found = false;
-    for (uint8_t i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+
+    for (int i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
         if (s_wifi_ctx.records[i].valid && strcmp(s_wifi_ctx.records[i].ssid, ssid) == 0) {
-            s_wifi_ctx.records[i].valid = false;
             memset(&s_wifi_ctx.records[i], 0, sizeof(wifi_connection_record_t));
             s_wifi_ctx.record_count--;
             found = true;
@@ -364,8 +433,10 @@ esp_err_t wifi_station_delete_record(const char *ssid)
     }
 
     if (found) {
-        save_records_to_nvs();
         ESP_LOGI(TAG, "Deleted WiFi record: %s", ssid);
+        save_records_to_nvs();
+    } else {
+        ESP_LOGW(TAG, "Failed to delete WiFi record: %s", ssid);
     }
 
     xSemaphoreGive(s_wifi_ctx.mutex);
@@ -388,7 +459,7 @@ esp_err_t wifi_station_add_record(const char *ssid, const char *password)
     }
 
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-    add_or_update_record_internal(ssid, password ? password : "");
+    add_or_update_record_internal(ssid, password ? password : "", false);
     xSemaphoreGive(s_wifi_ctx.mutex);
 
     return ESP_OK;
@@ -405,17 +476,21 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "Disconnected from WiFi SSID:%s, reason:%d", event->ssid, event->reason);
         
         xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-        s_wifi_ctx.status = WIFI_STATION_STATUS_DISCONNECTED;
+        s_wifi_ctx.state = WIFI_STATE_DISCONNECTED;
         s_wifi_ctx.connected_time = 0;
         xSemaphoreGive(s_wifi_ctx.mutex);
         
         xEventGroupSetBits(s_wifi_ctx.wifi_event_group, WIFI_FAIL_BIT);
+
+        // 断开后重连, 5秒后开始扫描, 防止过度扫描
+        s_wifi_ctx.next_scan_time = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         wifi_event_sta_connected_t* event = (wifi_event_sta_connected_t*) event_data;
         ESP_LOGI(TAG, "Connected to WiFi SSID:%s", event->ssid);
         
         xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-        s_wifi_ctx.status = WIFI_STATION_STATUS_CONNECTED;
+        s_wifi_ctx.state = WIFI_STATE_CONNECTED;
         memcpy(s_wifi_ctx.current_bssid, event->bssid, WIFI_STATION_BSSID_LEN);
         s_wifi_ctx.connected_time = esp_log_timestamp() / 1000;
         
@@ -424,6 +499,19 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
             s_wifi_ctx.current_rssi = ap_info.rssi;
         }
+
+        // 更新连接记录的valid标志
+        for (uint8_t i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+            if (s_wifi_ctx.records[i].ssid[0] != '\0' && 
+                strcmp(s_wifi_ctx.records[i].ssid, (char*)event->ssid) == 0) {
+                if (!s_wifi_ctx.records[i].valid) {
+                    s_wifi_ctx.records[i].valid = true;  // 标记为曾经连接成功
+                    save_records_to_nvs();  // 保存更新
+                }
+                break;
+            }
+        }
+        
         xSemaphoreGive(s_wifi_ctx.mutex);
         
         xEventGroupSetBits(s_wifi_ctx.wifi_event_group, WIFI_CONNECTED_BIT);
@@ -437,18 +525,21 @@ static void background_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Background WiFi task started");
     
-    TickType_t last_scan_time = 0;
     const TickType_t scan_interval = pdMS_TO_TICKS(30000); // 30秒扫描一次
 
     while (1) {
         TickType_t current_time = xTaskGetTickCount();
         
-        // 如果未连接且距离上次扫描超过间隔时间
-        if (s_wifi_ctx.status == WIFI_STATION_STATUS_DISCONNECTED && 
-            (current_time - last_scan_time) > scan_interval) {
+        // 如果后台扫描启用且未连接且距离上次扫描超过间隔时间
+        if ((s_wifi_ctx.auto_connect_one_shot) || (s_wifi_ctx.auto_connect_enabled && 
+            s_wifi_ctx.state == WIFI_STATE_DISCONNECTED && 
+            current_time > s_wifi_ctx.next_scan_time)) {
             
-            ESP_LOGI(TAG, "Background scan for auto-connect");
+            ESP_LOGI(TAG, "Background scan for auto-connect(%s)", s_wifi_ctx.auto_connect_one_shot ? "one-shot" : "enabled");
             
+            // 自动连接一次后, 自动连接标志位清零
+            s_wifi_ctx.auto_connect_one_shot = false;
+
             // 执行WiFi扫描
             wifi_scan_config_t scan_config = {
                 .ssid = NULL,
@@ -457,7 +548,9 @@ static void background_task(void *pvParameters)
                 .show_hidden = false
             };
             
+            uint32_t scan_start_time = xTaskGetTickCount();
             if (esp_wifi_scan_start(&scan_config, true) == ESP_OK) {
+                ESP_LOGD(TAG, "Scan completed, took %lu ms", (xTaskGetTickCount() - scan_start_time) * portTICK_PERIOD_MS);
                 uint16_t ap_count = 0;
                 esp_wifi_scan_get_ap_num(&ap_count);
                 
@@ -465,6 +558,11 @@ static void background_task(void *pvParameters)
                     wifi_ap_record_t *ap_list = malloc(sizeof(wifi_ap_record_t) * ap_count);
                     if (ap_list) {
                         esp_wifi_scan_get_ap_records(&ap_count, ap_list);
+
+                        ESP_LOGD(TAG, "Found %d WiFi networks", ap_count);
+                        for (uint16_t i = 0; i < ap_count; i++) {
+                            ESP_LOGD(TAG, " ssid: \"%s\", rssi: %d", ap_list[i].ssid, ap_list[i].rssi);
+                        }
                         
                         // 查找最佳网络进行连接
                         int best_index = find_best_network(ap_list, ap_count);
@@ -496,6 +594,8 @@ static void background_task(void *pvParameters)
                             if (i == WIFI_STATION_MAX_RECORDS) {
                                 xSemaphoreGive(s_wifi_ctx.mutex);
                             }
+                        } else {
+                            ESP_LOGW(TAG, "No suitable network found, try in %d seconds", scan_interval / portTICK_PERIOD_MS);
                         }
                         
                         free(ap_list);
@@ -503,10 +603,10 @@ static void background_task(void *pvParameters)
                 }
             }
             
-            last_scan_time = current_time;
+            s_wifi_ctx.next_scan_time = current_time + scan_interval;
         }
         
-        vTaskDelay(pdMS_TO_TICKS(5000)); // 5秒检查一次
+        vTaskDelay(pdMS_TO_TICKS(500)); // 500ms检查一次
     }
 }
 
@@ -519,27 +619,70 @@ static esp_err_t load_records_from_nvs(void)
         return err;
     }
 
-    size_t required_size = sizeof(s_wifi_ctx.records);
-    err = nvs_get_blob(nvs_handle, "records", s_wifi_ctx.records, &required_size);
-    if (err == ESP_OK) {
-        // 计算有效记录数量
-        s_wifi_ctx.record_count = 0;
-        for (uint8_t i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
-            if (s_wifi_ctx.records[i].valid) {
-                s_wifi_ctx.record_count++;
-            }
+    // 清空记录
+    memset(s_wifi_ctx.records, 0, sizeof(s_wifi_ctx.records));
+    s_wifi_ctx.record_count = 0;
+
+    char key_ssid[16];
+    char key_passwd[16];
+    char key_record[16];
+    char record_str[32];
+    size_t str_size;
+
+    // 遍历所有可能的记录ID
+    for (uint16_t id = 0; id < WIFI_STATION_MAX_RECORDS; id++) {
+        // 构造key名称
+        snprintf(key_ssid, sizeof(key_ssid), "ssid_%u", id);
+        snprintf(key_passwd, sizeof(key_passwd), "passwd_%u", id);
+        snprintf(key_record, sizeof(key_record), "record_%u", id);
+
+        // 读取SSID
+        str_size = sizeof(s_wifi_ctx.records[id].ssid);
+        err = nvs_get_str(nvs_handle, key_ssid, s_wifi_ctx.records[id].ssid, &str_size);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            continue;  // 该ID没有记录
         }
-        ESP_LOGI(TAG, "Loaded %d WiFi records from NVS", s_wifi_ctx.record_count);
-    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGI(TAG, "No WiFi records found in NVS");
-        memset(s_wifi_ctx.records, 0, sizeof(s_wifi_ctx.records));
-        s_wifi_ctx.record_count = 0;
-    } else {
-        ESP_LOGE(TAG, "Failed to load WiFi records from NVS: %s", esp_err_to_name(err));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read SSID for id %u: %s", id, esp_err_to_name(err));
+            continue;
+        }
+
+        // 读取密码
+        str_size = sizeof(s_wifi_ctx.records[id].password);
+        err = nvs_get_str(nvs_handle, key_passwd, s_wifi_ctx.records[id].password, &str_size);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read password for id %u: %s", id, esp_err_to_name(err));
+            continue;
+        }
+
+        // 读取记录状态
+        str_size = sizeof(record_str);
+        err = nvs_get_str(nvs_handle, key_record, record_str, &str_size);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read record for id %u: %s", id, esp_err_to_name(err));
+            continue;
+        }
+        
+        uint32_t sequence;
+        int ever_success;
+        if (sscanf(record_str, "%d;%" PRIu32, &ever_success, &sequence) != 2) {
+            ESP_LOGW(TAG, "Invalid record format for id %u", id);
+            continue;
+        }
+        // 设置记录
+        s_wifi_ctx.records[id].id = id;
+        s_wifi_ctx.records[id].ever_success = (bool)ever_success;
+        s_wifi_ctx.records[id].sequence = sequence;
+        s_wifi_ctx.records[id].valid = true;
+        s_wifi_ctx.record_count++;
+
+        ESP_LOGD(TAG, "nvs record-%u: ssid: \"%s\", password: \"%s\", ever_success: %d, sequence: %" PRIu32, 
+                 id, s_wifi_ctx.records[id].ssid, s_wifi_ctx.records[id].password, s_wifi_ctx.records[id].ever_success, s_wifi_ctx.records[id].sequence);
     }
 
+    ESP_LOGI(TAG, "Loaded %d WiFi records from NVS", s_wifi_ctx.record_count);
     nvs_close(nvs_handle);
-    return err;
+    return ESP_OK;
 }
 
 static esp_err_t save_records_to_nvs(void)
@@ -551,16 +694,53 @@ static esp_err_t save_records_to_nvs(void)
         return err;
     }
 
-    err = nvs_set_blob(nvs_handle, "records", s_wifi_ctx.records, sizeof(s_wifi_ctx.records));
-    if (err == ESP_OK) {
-        err = nvs_commit(nvs_handle);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Saved WiFi records to NVS");
+    char key_ssid[16];
+    char key_passwd[16];
+    char key_record[16];
+    char record_str[32];
+
+    // 遍历所有记录
+    for (uint16_t id = 0; id < WIFI_STATION_MAX_RECORDS; id++) {
+        // 构造key名称
+        snprintf(key_ssid, sizeof(key_ssid), "ssid_%u", id);
+        snprintf(key_passwd, sizeof(key_passwd), "passwd_%u", id);
+        snprintf(key_record, sizeof(key_record), "record_%u", id);
+
+        if (s_wifi_ctx.records[id].valid) {  // 有效记录
+            // 保存SSID
+            err = nvs_set_str(nvs_handle, key_ssid, s_wifi_ctx.records[id].ssid);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to save SSID for id %u: %s", id, esp_err_to_name(err));
+                continue;
+            }
+
+            // 保存密码
+            err = nvs_set_str(nvs_handle, key_passwd, s_wifi_ctx.records[id].password);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to save password for id %u: %s", id, esp_err_to_name(err));
+                continue;
+            }
+
+            // 保存记录状态
+            snprintf(record_str, sizeof(record_str), "%d;%" PRIu32, 
+                    (int)s_wifi_ctx.records[id].ever_success, s_wifi_ctx.records[id].sequence);
+            err = nvs_set_str(nvs_handle, key_record, record_str);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to save record for id %u: %s", id, esp_err_to_name(err));
+                continue;
+            }
+        } else {  // 空记录,删除相关key
+            nvs_erase_key(nvs_handle, key_ssid);
+            nvs_erase_key(nvs_handle, key_passwd);
+            nvs_erase_key(nvs_handle, key_record);
         }
     }
 
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save WiFi records to NVS: %s", esp_err_to_name(err));
+    err = nvs_commit(nvs_handle);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Saved WiFi records to NVS");
+    } else {
+        ESP_LOGE(TAG, "Failed to commit NVS: %s", esp_err_to_name(err));
     }
 
     nvs_close(nvs_handle);
@@ -581,6 +761,8 @@ static esp_err_t load_sequence_from_nvs(void)
     if (err != ESP_OK) {
         s_wifi_ctx.current_sequence = 1;
     }
+
+    ESP_LOGI(TAG, "nvs sequence: %" PRIu32, s_wifi_ctx.current_sequence);
 
     nvs_close(nvs_handle);
     return ESP_OK;
@@ -608,6 +790,13 @@ static int find_best_network(wifi_ap_record_t *ap_list, uint16_t ap_count)
     int best_index = -1;
     int8_t best_rssi = -127;
     uint32_t best_sequence = 0;
+    bool best_has_connected = false;
+
+    // 如果没有连接记录,则直接返回-1
+    if (s_wifi_ctx.record_count == 0) {
+        ESP_LOGD(TAG, "No WiFi records found");
+        return -1;
+    }
 
     for (uint16_t i = 0; i < ap_count; i++) {
         // 查找是否有对应的连接记录
@@ -615,22 +804,50 @@ static int find_best_network(wifi_ap_record_t *ap_list, uint16_t ap_count)
             if (s_wifi_ctx.records[j].valid && 
                 strcmp(s_wifi_ctx.records[j].ssid, (char*)ap_list[i].ssid) == 0) {
                 
-                // 优先选择信号强度最好的，其次选择序号最大的（最近连接的）
-                if (ap_list[i].rssi > best_rssi || 
-                    (ap_list[i].rssi == best_rssi && s_wifi_ctx.records[j].sequence > best_sequence)) {
+                // 跳过被用户主动断开的网络
+                if (s_wifi_ctx.records[j].user_disconnected) {
+                    ESP_LOGD(TAG, "Skip user disconnected network: %s", s_wifi_ctx.records[j].ssid);
+                    break;
+                }
+                
+                bool current_has_connected = s_wifi_ctx.records[j].ever_success;
+                
+                // 优先选择曾经连接成功过的网络
+                if (!best_has_connected && current_has_connected) {
                     best_index = i;
                     best_rssi = ap_list[i].rssi;
                     best_sequence = s_wifi_ctx.records[j].sequence;
+                    best_has_connected = true;
+
+                    ESP_LOGD(TAG, "hit network: %s (rssi: %d, ever_success: %d)", 
+                             ap_list[i].ssid, best_rssi, best_has_connected);
+                } 
+                // 如果都是连接成功过的或都是未连接过的,则比较信号强度和序号
+                else if (best_has_connected == current_has_connected) {
+                    if (ap_list[i].rssi > best_rssi || 
+                        (ap_list[i].rssi == best_rssi && s_wifi_ctx.records[j].sequence > best_sequence)) {
+                        best_index = i;
+                        best_rssi = ap_list[i].rssi;
+                        best_sequence = s_wifi_ctx.records[j].sequence;
+                        best_has_connected = current_has_connected;
+
+                        ESP_LOGD(TAG, "hit network: %s (rssi: %d, ever_success: %d)", 
+                                 ap_list[i].ssid, best_rssi, best_has_connected);
+                    }
                 }
                 break;
             }
         }
     }
 
+    if (best_index >= 0) {
+        ESP_LOGI(TAG, "Selected network: %s (RSSI: %d)", 
+                 ap_list[best_index].ssid, best_rssi);
+    } 
     return best_index;
 }
 
-static void add_or_update_record_internal(const char *ssid, const char *password)
+static void add_or_update_record_internal(const char *ssid, const char *password, bool ever_success)
 {
     // 查找是否已存在该SSID的记录
     int existing_index = -1;
@@ -646,6 +863,8 @@ static void add_or_update_record_internal(const char *ssid, const char *password
         strncpy(s_wifi_ctx.records[existing_index].password, password, WIFI_STATION_PASSWORD_LEN - 1);
         s_wifi_ctx.records[existing_index].password[WIFI_STATION_PASSWORD_LEN - 1] = '\0';
         s_wifi_ctx.records[existing_index].sequence = ++s_wifi_ctx.current_sequence;
+        s_wifi_ctx.records[existing_index].ever_success = ever_success;
+        // 不修改user_disconnected标记，保持其当前状态
         ESP_LOGI(TAG, "Updated WiFi record: %s", ssid);
     } else {
         // 添加新记录
@@ -681,6 +900,8 @@ static void add_or_update_record_internal(const char *ssid, const char *password
         strncpy(s_wifi_ctx.records[free_index].ssid, ssid, WIFI_STATION_SSID_LEN - 1);
         strncpy(s_wifi_ctx.records[free_index].password, password, WIFI_STATION_PASSWORD_LEN - 1);
         s_wifi_ctx.records[free_index].sequence = ++s_wifi_ctx.current_sequence;
+        s_wifi_ctx.records[free_index].ever_success = ever_success;
+        s_wifi_ctx.records[free_index].user_disconnected = false;  // 新记录初始化为false
         s_wifi_ctx.records[free_index].valid = true;
         s_wifi_ctx.record_count++;
         
@@ -689,4 +910,25 @@ static void add_or_update_record_internal(const char *ssid, const char *password
     
     save_records_to_nvs();
     save_sequence_to_nvs();
+}
+
+esp_err_t wifi_station_set_auto_connect(bool enable)
+{
+    if (!s_wifi_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+    s_wifi_ctx.auto_connect_enabled = enable;
+    xSemaphoreGive(s_wifi_ctx.mutex);
+
+    ESP_LOGI(TAG, "Auto connect %s", enable ? "enabled" : "disabled");
+    return ESP_OK;
 } 
+
+void wifi_station_try_auto_connect_once(void)
+{
+    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+    s_wifi_ctx.auto_connect_one_shot = true;
+    xSemaphoreGive(s_wifi_ctx.mutex);
+}
