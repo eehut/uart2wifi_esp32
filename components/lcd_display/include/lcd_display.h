@@ -171,6 +171,19 @@ int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int wi
  */
 int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool refresh);
 
+/**
+ * @brief 绘制矩形方法2
+ * 
+ * @param disp LCD显示句柄
+ * @param start_x 左上角x坐标
+ * @param start_y 左上角y坐标
+ * @param x_len 矩形宽度
+ * @param y_len 矩形高度
+ * @param width 线宽(向内缩进)
+ * @param refresh 是否立即刷新屏幕
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, int y_len, int width, bool refresh);
 
 #ifdef __cplusplus
 }

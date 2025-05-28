@@ -885,6 +885,89 @@ int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, i
 }
 
 /**
+ * @brief 绘制矩形方法2
+ * 
+ * @param disp LCD显示句柄
+ * @param start_x 左上角x坐标
+ * @param start_y 左上角y坐标
+ * @param x_len 矩形宽度
+ * @param y_len 矩形高度
+ * @param width 线宽(向内缩进)
+ * @param refresh 是否立即刷新屏幕
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, int y_len, int width, bool refresh)
+{
+    lcd_display_t *lcd = (lcd_display_t *)disp;
+
+    // 基本参数检查
+    if (!lcd || width <= 0) {
+        return -1;
+    }
+
+    // 检查矩形尺寸是否满足最小要求
+    // 宽度和高度都必须大于等于2倍的线宽，否则无法正确绘制
+    if (x_len < 2 * width || y_len < 2 * width) {
+        ESP_LOGW(TAG, "Rectangle size too small for line width. x_len=%d, y_len=%d, width=%d", 
+            x_len, y_len, width);
+        return -1;
+    }
+
+    // 检查是否完全在屏幕外
+    if (start_x >= lcd->xsize || start_y >= lcd->ysize || 
+        start_x + x_len <= 0 || start_y + y_len <= 0) {
+        ESP_LOGW(TAG, "Rectangle out of screen. x=%d, y=%d", start_x, start_y);
+        return -1;
+    }
+
+    // 计算每条边的起始和结束位置
+    for (int i = 0; i < width; i++) {
+        // 绘制上边
+        lcd_draw_horizontal_line(disp, 
+            start_x + i,          // 起始x
+            start_y + i,          // 起始y
+            x_len - 2 * i,        // 长度
+            1,                    // 线宽
+            false                 // 不立即刷新
+        );
+
+        // 绘制下边
+        lcd_draw_horizontal_line(disp,
+            start_x + i,          // 起始x
+            start_y + y_len - i - 1, // 起始y
+            x_len - 2 * i,        // 长度
+            1,                    // 线宽
+            false                 // 不立即刷新
+        );
+
+        // 绘制左边
+        lcd_draw_vertical_line(disp,
+            start_x + i,          // 起始x
+            start_y + i,          // 起始y
+            y_len - 2 * i,        // 长度
+            1,                    // 线宽
+            false                 // 不立即刷新
+        );
+
+        // 绘制右边
+        lcd_draw_vertical_line(disp,
+            start_x + x_len - i - 1, // 起始x
+            start_y + i,          // 起始y
+            y_len - 2 * i,        // 长度
+            1,                    // 线宽
+            false                 // 不立即刷新
+        );
+    }
+
+    // 如果需要立即刷新
+    if (refresh) {
+        lcd_refresh(disp);
+    }
+
+    return 0;
+}
+
+/**
  * @brief 清除指定区域的显示内容
  * 
  * @param disp LCD显示句柄

@@ -16,6 +16,7 @@
 #include "ext_gpio.h"
 #include "export_ids.h"
 #include "app_event_loop.h"
+#include "time.h"
 #include "uptime.h"
 #include "wifi_station.h"
 #include <stdint.h>
@@ -47,6 +48,15 @@ typedef enum {
 } display_page_t;
 
 
+// 定义一个弹出框
+typedef enum {
+    POPUP_NONE = 0,
+    POPUP_MENU,
+    POPUP_MSG,
+    POPUP_MAX
+}display_popup_t;
+
+
 // 主页数据结构
 typedef struct 
 {
@@ -64,6 +74,19 @@ typedef struct
     }animation_line;
 }page_home_data_t;
 
+// 消息框数据结构
+typedef struct {
+    char message[32];
+}popup_msg_data_t;
+
+// 菜单框数据结构       
+typedef struct {
+#define _MENU_ENTRY_UART 0
+#define _MENU_ENTRY_NETWORK 1
+#define _MENU_ENTRY_HELP 2
+#define _MENU_ENTRY_MAX 3    
+    uint8_t selected_index;
+}popup_menu_data_t;
 
 /**
  * @brief 显示上下文
@@ -86,9 +109,16 @@ typedef struct {
         page_home_data_t home;
     } page;
 
+    struct {
+        bool dirty;
+        display_popup_t current_popup;
+        sys_tick_t popup_expried_time;
+        popup_menu_data_t menu;
+        popup_msg_data_t msg;
+    } popup;
+
+
     sys_tick_t data_update_time;
-
-
 }display_context_t;
 
 
@@ -100,6 +130,9 @@ static void display_update_data(display_context_t* ctx);
 
 // 绘制主页
 static void draw_home_page(display_context_t* ctx);
+
+// 绘制弹出框
+static void draw_popup(display_context_t* ctx);
 
 // 更新主页动画
 static bool update_home_animation(display_context_t* ctx);
@@ -130,6 +163,7 @@ static inline display_context_t* get_context(void)
  */
 static void button_event_handler(void* handler_args, esp_event_base_t base, int32_t id, void* event_data)
 {
+    display_context_t* ctx = get_context();
     ext_gpio_event_data_t* data = (ext_gpio_event_data_t*)event_data;
 
     if (data->gpio_id != GPIO_BUTTON) {
@@ -137,40 +171,69 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
     }
     
     // 根据事件类型进行不同处理
-    // switch(id) {
-    //     case EXT_GPIO_EVENT_BUTTON_PRESSED:
-    //         ESP_LOGI(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
-    //         break; 
-    //     case EXT_GPIO_EVENT_BUTTON_RELEASED:
-    //         ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);
+    switch(id) {
+        case EXT_GPIO_EVENT_BUTTON_PRESSED:
+            ESP_LOGI(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
+            break; 
             
-    //         // 轮流显示不同的信号图标
-    //         s_current_signal_level = (s_current_signal_level + 1) % 5; // 0-4循环
-    //         display_signal_level(s_current_signal_level);
-    //         break;
+        case EXT_GPIO_EVENT_BUTTON_RELEASED:
+            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);
             
-    //     case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
-    //         ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);
+            // 如果弹出框已经显示，则关闭它
+            //if (data->data.button.click_count == 1) {
+            //     ctx->popup.current_popup = POPUP_MENU;
+            //     ctx->popup.menu.selected_index = 0;
+            //     ctx->popup.dirty = true;
+            //     ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭            
+            // }
+         
+            break;
             
-    //         // 长按时设置LED闪烁
-    //         if (data->gpio_id == GPIO_BUTTON && data->data.button.long_pressed == 3) {
-    //             ext_led_flash(GPIO_SYS_LED, 0x0003, 0xFFFF);
-    //         }
-    //         break;
+        case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
+            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);
             
-    //     case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
-    //         ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
+            break;
+            
+        case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
+            ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
 
-    //         // 双击时改变LED闪烁模式
-    //         if (data->gpio_id == GPIO_BUTTON && data->data.button.click_count == 2) {
-    //             ext_led_flash(GPIO_SYS_LED, 0x333, 0xFFF);
-    //         }
-    //         // 三击时改变LED闪烁模式
-    //         else if (data->gpio_id == GPIO_BUTTON && data->data.button.click_count == 3) {
-    //             ext_led_flash(GPIO_SYS_LED, 0x03F, 0xFFF);
-    //         }
-    //         break;
-    // }
+            if (data->data.button.click_count == 1) {
+                if (ctx->popup.current_popup == POPUP_MENU) {
+                    // 如果菜单已经显示, 则切换菜单 
+                    ctx->popup.menu.selected_index = (ctx->popup.menu.selected_index + 1) % _MENU_ENTRY_MAX;
+                    ctx->popup.dirty = true;
+                    ctx->popup.popup_expried_time = uptime() + 10000; // 10秒后自动关闭
+                } else {
+                    // 显示菜单
+                    ctx->popup.current_popup = POPUP_MENU;
+                    ctx->popup.menu.selected_index = 0;
+                    ctx->popup.dirty = true;
+                    ctx->popup.popup_expried_time = uptime() + 10000;
+                }   
+            }
+            // 双击显示菜单, 或确认选项, 或关闭菜单 
+            else if (data->data.button.click_count == 2) {
+                if (ctx->popup.current_popup == POPUP_MENU) {                    
+                    ctx->popup.current_popup = POPUP_NONE;
+                    ctx->popup.dirty = true;
+                    //ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭
+                } else {
+                    // 显示菜单
+                    ctx->popup.current_popup = POPUP_MENU;
+                    ctx->popup.menu.selected_index = 0;
+                    ctx->popup.dirty = true;
+                    ctx->popup.popup_expried_time = uptime() + 10000;
+                }
+            }
+            // 三击显示消息
+            else if (data->data.button.click_count == 3) {
+                ctx->popup.current_popup = POPUP_MSG;
+                //snprintf(ctx->popup.msg.message, sizeof(ctx->popup.msg.message), "TODO");
+                ctx->popup.dirty = true;
+                ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭
+            }
+            break;
+    }
 }
 
 /**
@@ -294,7 +357,7 @@ esp_err_t display_task_stop(void)
 static void display_task(void *arg)
 {
     TickType_t last_wake_time = xTaskGetTickCount();
-    const TickType_t refresh_period = pdMS_TO_TICKS(1000 / DISPLAY_REFRESH_RATE_HZ); // 计算刷新周期
+    const TickType_t refresh_period = pdMS_TO_TICKS(1000 / DISPLAY_REFRESH_RATE_HZ);
     
     ESP_LOGI(TAG, "Display task started, refresh rate: %dHz", DISPLAY_REFRESH_RATE_HZ);
 
@@ -305,7 +368,7 @@ static void display_task(void *arg)
         sys_tick_t now = uptime();
         bool refresh = false;
 
-        // 刷新数据, 500ms 刷新一次
+        // 刷新数据
         if (uptime_after(now, ctx->data_update_time)) {
             display_update_data(ctx);
             ctx->data_update_time = now + 250;
@@ -316,11 +379,20 @@ static void display_task(void *arg)
             ctx->page.dirty = true;
         }
 
-        if (ctx->page.dirty) 
+        // 检查弹出框是否超时
+        if (ctx->popup.current_popup != POPUP_NONE && 
+            uptime_after(now, ctx->popup.popup_expried_time)) {
+            ctx->popup.current_popup = POPUP_NONE;
+            ctx->popup.dirty = true;
+        }
+
+        // 刷新显示
+        if (ctx->page.dirty || ctx->popup.dirty) 
         {            
             // 清屏
             lcd_fill(ctx->lcd_handle, 0x00);
 
+            // 绘制当前页面
             switch (ctx->page.current_page) {
                 case PAGE_HOME:
                     draw_home_page(ctx);
@@ -329,7 +401,13 @@ static void display_task(void *arg)
                     break;
             }
 
+            // 绘制弹出框
+            if (ctx->popup.current_popup != POPUP_NONE) {
+                draw_popup(ctx);
+            }
+
             ctx->page.dirty = false;
+            ctx->popup.dirty = false;
             refresh = true;
         }
 
@@ -551,4 +629,121 @@ static void draw_home_page(display_context_t* ctx)
     // 显示接收和发送字节数
     lcd_display_string(ctx->lcd_handle, 2, LINE4_TEXT_Y, rx_str, LCD_FONT(ascii_8x8), false);
     lcd_display_string(ctx->lcd_handle, 66, LINE4_TEXT_Y, tx_str, LCD_FONT(ascii_8x8), false);
+}
+
+#define POPUP_WIDTH     108
+#define POPUP_HEIGHT    44
+#define POPUP_MARGIN    3
+#define POPUP_PADDING   2
+#define POPUP_X         ((128 - POPUP_WIDTH) / 2)
+#define POPUP_Y         14
+
+#define POPUP_FRAME_WIDTH  (POPUP_WIDTH - POPUP_MARGIN * 2)
+#define POPUP_FRAME_HEIGHT (POPUP_HEIGHT - POPUP_MARGIN * 2)
+#define POPUP_FRAME_X      (POPUP_X + POPUP_MARGIN)
+#define POPUP_FRAME_Y      (POPUP_Y + POPUP_MARGIN)
+
+/**
+ * @brief 绘制弹出框
+ * 
+ * @param ctx 显示上下文
+ */
+static void draw_popup(display_context_t* ctx)
+{
+    if (ctx->popup.current_popup == POPUP_NONE) {
+        return;
+    }
+
+    // 清除弹出框区域
+    lcd_clear_area(ctx->lcd_handle, 
+        POPUP_X, 
+        POPUP_Y, 
+        POPUP_WIDTH,
+        POPUP_HEIGHT
+    );
+
+    // 绘制边框
+    // x+m, y+m, x+w-m, y+h-m
+    lcd_draw_rectangle1(ctx->lcd_handle,
+        POPUP_FRAME_X,
+        POPUP_FRAME_Y,
+        POPUP_FRAME_WIDTH,
+        POPUP_FRAME_HEIGHT,
+        1,
+        false
+    );
+
+    // 根据弹出框类型绘制内容
+    switch (ctx->popup.current_popup) {
+        case POPUP_MENU:
+        {
+            const int icon_y = POPUP_FRAME_Y + 8;
+            const int img_width = 16;
+            const int icon_spacing = (POPUP_FRAME_WIDTH - img_width * 3) / 4;
+            
+            // 绘制三个图标
+            lcd_display_mono_img(ctx->lcd_handle, 
+                POPUP_FRAME_X + icon_spacing, 
+                icon_y, 
+                LCD_IMG(serial), 
+                false);
+
+            lcd_display_mono_img(ctx->lcd_handle, 
+                POPUP_FRAME_X + icon_spacing * 2 + img_width, 
+                icon_y, 
+                LCD_IMG(network), 
+                false);
+
+            lcd_display_mono_img(ctx->lcd_handle, 
+                POPUP_FRAME_X + icon_spacing * 3 + img_width * 2, 
+                icon_y, 
+                LCD_IMG(help), 
+                false);
+
+            // 在选中的图标下方绘制下划线
+            const int underline_y = icon_y + img_width + 2; // 图标下方2像素的间隙
+            const int underline_width = 12;  // 下划线宽度略小于图标
+            const int underline_height = 3;  // 下划线高度
+
+            // 根据选中的菜单项计算下划线位置
+            int underline_x = POPUP_FRAME_X + icon_spacing + (img_width - underline_width) / 2; // 默认在第一个图标下
+            switch(ctx->popup.menu.selected_index) {
+                case _MENU_ENTRY_UART:
+                    // 使用默认值
+                    break;
+                case _MENU_ENTRY_NETWORK:
+                    underline_x = POPUP_FRAME_X + icon_spacing * 2 + img_width + (img_width - underline_width) / 2;
+                    break;
+                case _MENU_ENTRY_HELP:
+                    underline_x = POPUP_FRAME_X + icon_spacing * 3 + img_width * 2 + (img_width - underline_width) / 2;
+                    break;
+                default:
+                    break;
+            }
+
+            // 绘制下划线
+            lcd_draw_horizontal_line(ctx->lcd_handle,
+                underline_x,
+                underline_y,
+                underline_width,
+                underline_height,
+                false
+            );
+            break;
+        }
+        case POPUP_MSG:
+        {
+            // 显示消息文本
+            lcd_display_string(ctx->lcd_handle,
+                POPUP_FRAME_X + POPUP_PADDING,
+                POPUP_FRAME_Y + POPUP_PADDING,
+                "TODO",
+                LCD_FONT(ascii_8x16),
+                false
+            );
+            break;
+        }
+        default:
+            break;
+    }
 }
