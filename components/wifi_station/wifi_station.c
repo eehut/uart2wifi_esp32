@@ -184,8 +184,12 @@ esp_err_t wifi_station_get_status(wifi_connection_status_t *status)
 
     memset(status, 0, sizeof(wifi_connection_status_t));
     status->state = s_wifi_ctx.state;
-    
-    if (s_wifi_ctx.state == WIFI_STATE_CONNECTED) {
+
+    if (s_wifi_ctx.state == WIFI_STATE_CONNECTING) {
+        strcpy(status->ssid, s_wifi_ctx.current_ssid);
+        memcpy(status->bssid, s_wifi_ctx.current_bssid, WIFI_STATION_BSSID_LEN);
+        status->rssi = s_wifi_ctx.current_rssi;
+    } else if (s_wifi_ctx.state == WIFI_STATE_CONNECTED) {
         strcpy(status->ssid, s_wifi_ctx.current_ssid);
         memcpy(status->bssid, s_wifi_ctx.current_bssid, WIFI_STATION_BSSID_LEN);
         status->rssi = s_wifi_ctx.current_rssi;

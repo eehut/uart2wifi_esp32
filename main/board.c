@@ -20,7 +20,7 @@
 static const char *TAG = "board";
 
 /// 系统GPIO配置
-static ext_gpio_config_t s_gpio_configs[] = {
+static const ext_gpio_config_t s_gpio_configs[] = {
     { .id = GPIO_SYS_LED, .name = "sys_led", .chip = _GPIO_CHIP_SOC, .pin = GPIO_NUM_7, .flags = _GPIO_FLAG_OUTPUT },
     #ifdef CONFIG_IDF_TARGET_ESP32S3
     { .id = GPIO_BUTTON, .name = "test", .chip = _GPIO_CHIP_SOC, .pin = GPIO_NUM_0, .flags = _GPIO_FLAG_BUTTON | _GPIO_FLAG_INPUT | _GPIO_FLAG_ACTIVE_LOW },
@@ -31,7 +31,7 @@ static ext_gpio_config_t s_gpio_configs[] = {
 
 
 /// I2C总线 
-static i2c_bus_config_t s_i2c_bus_config = {
+static const i2c_bus_config_t s_i2c_bus_config = {
     .port = I2C_NUM_0,
     .sda_io_num = GPIO_NUM_5,
     .scl_io_num = GPIO_NUM_6,

@@ -20,8 +20,7 @@
 #include "esp_log.h"
 #include "cli_menu.h"
 
-static const char *TAG = "app_main";
-
+//static const char *TAG = "app_main";
 
 void app_main(void)
 {
@@ -31,7 +30,7 @@ void app_main(void)
     esp_log_level_set("*", ESP_LOG_INFO);
     //esp_log_level_set("ext_gpio", ESP_LOG_DEBUG);
     //esp_log_level_set("app_event", ESP_LOG_DEBUG);
-    esp_log_level_set("app_main", ESP_LOG_DEBUG);
+    esp_log_level_set("display", ESP_LOG_DEBUG);
     esp_log_level_set("wifi_station", ESP_LOG_DEBUG);
 
     // 初始化APP事件循环, GPIO按键事件处理
@@ -59,7 +58,7 @@ void app_main(void)
 
     // 设置LED闪烁模式
     // 0x33 = 00110011，表示LED会以更快的速度闪烁
-    ext_led_flash(GPIO_SYS_LED, 0x33, 0xFF);
+    ext_led_flash(GPIO_SYS_LED, 0x01, 0xFFFFFFFF);
 
     // 初始化WiFi Station组件
     ESP_ERROR_CHECK(wifi_station_init());
@@ -69,18 +68,10 @@ void app_main(void)
     ESP_ERROR_CHECK(cli_menu_start());
 
     // 初始化显示模块
-    lcd_handle_t lcd = display_init();
-    if (lcd == NULL) {
-        ESP_LOGE(TAG, "Failed to initialize display");
-        return;
-    }
+    ESP_ERROR_CHECK(display_init());
 
     // 启动显示任务
-    ret = display_task_start(lcd);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start display task: %s", esp_err_to_name(ret));
-        return;
-    }
+    ESP_ERROR_CHECK(display_task_start());
 
     while (1) {
         mdelay(1000);
