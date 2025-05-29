@@ -27,7 +27,7 @@ LCD_MONO_IMG_DECLARE(no_signal_2);
 LCD_MONO_IMG_DECLARE(network);
 LCD_MONO_IMG_DECLARE(serial);
 LCD_MONO_IMG_DECLARE(help);
-
+LCD_MONO_IMG_DECLARE(qrcode);
 
 #ifdef __cplusplus
 }

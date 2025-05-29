@@ -41,8 +41,8 @@ LCD_DEFINE_SSD1312_128X64(ssd1312);
 // 页面标识
 typedef enum {
     PAGE_HOME = 0,
-    PAGE_WIFI,
     PAGE_UART,
+    PAGE_NETWORK,
     PAGE_HELP,
     PAGE_MAX
 } display_page_t;
@@ -73,6 +73,14 @@ typedef struct
         sys_tick_t last_update_time;
     }animation_line;
 }page_home_data_t;
+
+
+typedef struct {
+    uint8_t selected_index;
+    uint8_t display_num;
+    uint8_t baudrate_num;
+}page_uart_data_t;
+
 
 // 消息框数据结构
 typedef struct {
@@ -107,6 +115,7 @@ typedef struct {
         display_page_t current_page;        
         sys_tick_t page_expried_time;
         page_home_data_t home;
+        page_uart_data_t uart;
     } page;
 
     struct {
@@ -122,6 +131,10 @@ typedef struct {
 }display_context_t;
 
 
+static const uint32_t s_supported_baudrates[] = {
+    9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
+};
+
 // 显示上下文全局变量
 static display_context_t s_display_context = { 0 };
 
@@ -130,6 +143,15 @@ static void display_update_data(display_context_t* ctx);
 
 // 绘制主页
 static void draw_home_page(display_context_t* ctx);
+
+// 绘制串口页面
+static void draw_uart_page(display_context_t* ctx);
+
+// 绘制网络页面
+static void draw_network_page(display_context_t* ctx);
+
+// 绘制帮助页面
+static void draw_help_page(display_context_t* ctx);
 
 // 绘制弹出框
 static void draw_popup(display_context_t* ctx);
@@ -177,52 +199,121 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
             break; 
             
         case EXT_GPIO_EVENT_BUTTON_RELEASED:
-            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);
-            
-            // 如果弹出框已经显示，则关闭它
-            //if (data->data.button.click_count == 1) {
-            //     ctx->popup.current_popup = POPUP_MENU;
-            //     ctx->popup.menu.selected_index = 0;
-            //     ctx->popup.dirty = true;
-            //     ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭            
-            // }
-         
+            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);         
             break;
             
         case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
-            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);
-            
+            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);            
             break;
             
         case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
             ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
 
-            if (data->data.button.click_count == 1) {
-                if (ctx->popup.current_popup == POPUP_MENU) {
-                    // 如果菜单已经显示, 则切换菜单 
-                    ctx->popup.menu.selected_index = (ctx->popup.menu.selected_index + 1) % _MENU_ENTRY_MAX;
-                    ctx->popup.dirty = true;
-                    ctx->popup.popup_expried_time = uptime() + 10000; // 10秒后自动关闭
-                } else {
-                    // 显示菜单
-                    ctx->popup.current_popup = POPUP_MENU;
-                    ctx->popup.menu.selected_index = 0;
-                    ctx->popup.dirty = true;
-                    ctx->popup.popup_expried_time = uptime() + 10000;
-                }   
+            /*
+            主页:
+               单击显示菜单, 切换选项, 双击进入选择的子菜单, 超时关闭菜单 
+
+            帮助页:
+                任意按键退出, 超时(60秒)退出. 
+                不会唤起弹出菜单. 
+
+            串口页:
+                单击切换选项, 双击确认选项,并回到 home 
+                超时关闭菜单 
+                不会唤起弹出菜单. 
+
+            网络页:
+                单击切换选项, 双击确认选项,并回到 home 
+                超时关闭菜单 
+                不会唤起弹出菜单. 
+            */
+
+
+            if (data->data.button.click_count == 1) 
+            {
+                if (ctx->page.current_page == PAGE_HOME) 
+                {
+                    if (ctx->popup.current_popup == POPUP_MENU) {
+                        // 如果菜单已经显示, 则切换菜单 
+                        ctx->popup.menu.selected_index = (ctx->popup.menu.selected_index + 1) % _MENU_ENTRY_MAX;
+                        ctx->popup.dirty = true;
+                        ctx->popup.popup_expried_time = uptime() + 10000; // 10秒后自动关闭
+                    } else {
+                        // 显示菜单
+                        ctx->popup.current_popup = POPUP_MENU;
+                        ctx->popup.menu.selected_index = 0;
+                        ctx->popup.dirty = true;
+                        ctx->popup.popup_expried_time = uptime() + 10000;
+                    }                       
+                } 
+                else if (ctx->page.current_page == PAGE_UART)
+                {
+                    // 定义支持的波特率列表
+                    ctx->page.uart.selected_index = (ctx->page.uart.selected_index + 1) % ctx->page.uart.baudrate_num;
+                    ctx->page.dirty = true;
+                    // 延长页面显示时间
+                    ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                }
+                else // 其他子页,单击 可以延长时间, 超时返回主页
+                {
+                    ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                }
             }
             // 双击显示菜单, 或确认选项, 或关闭菜单 
-            else if (data->data.button.click_count == 2) {
-                if (ctx->popup.current_popup == POPUP_MENU) {                    
-                    ctx->popup.current_popup = POPUP_NONE;
-                    ctx->popup.dirty = true;
-                    //ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭
-                } else {
-                    // 显示菜单
-                    ctx->popup.current_popup = POPUP_MENU;
-                    ctx->popup.menu.selected_index = 0;
-                    ctx->popup.dirty = true;
-                    ctx->popup.popup_expried_time = uptime() + 10000;
+            else if (data->data.button.click_count == 2) 
+            {
+                if (ctx->page.current_page == PAGE_HOME) 
+                {
+                    if (ctx->popup.current_popup == POPUP_MENU) {    
+                        // 双击进入选择的子菜单 
+                        switch (ctx->popup.menu.selected_index) {
+                            case _MENU_ENTRY_UART:
+                                ESP_LOGI(TAG, "enter uart menu");
+                                ctx->page.current_page = PAGE_UART;
+                                break;
+                            case _MENU_ENTRY_NETWORK:
+                                ESP_LOGI(TAG, "enter network menu");
+                                ctx->page.current_page = PAGE_NETWORK;
+                                break;
+                            case _MENU_ENTRY_HELP:
+                                ESP_LOGI(TAG, "enter help menu");
+                                ctx->page.current_page = PAGE_HELP;                                
+                                break;
+                            default:
+                                break;
+                        }
+                        
+                        ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                        ctx->popup.current_popup = POPUP_NONE;
+                        ctx->popup.dirty = true;
+                        
+                    } else {
+                        // 显示菜单
+                        ctx->popup.current_popup = POPUP_MENU;
+                        ctx->popup.menu.selected_index = 0;
+                        ctx->popup.dirty = true;
+                        ctx->popup.popup_expried_time = uptime() + 10000;
+                    }
+                } 
+                else if (ctx->page.current_page == PAGE_HELP) 
+                {
+                    ctx->page.current_page = PAGE_HOME;
+                    ctx->page.dirty = true;                        
+                }
+                else if (ctx->page.current_page == PAGE_UART) 
+                {
+                    // 获取选中的波特率
+                    ctx->page.home.baudrate = s_supported_baudrates[ctx->page.uart.selected_index];
+                    // TODO: 保存到配置
+                    ESP_LOGI(TAG, "TODO: apply baudrate: %u", ctx->page.home.baudrate);
+                    // 返回主页
+                    ctx->page.current_page = PAGE_HOME;
+                    ctx->page.dirty = true;                        
+                }
+                else if (ctx->page.current_page == PAGE_NETWORK) 
+                {
+                    ctx->page.current_page = PAGE_HOME;
+                    ctx->page.dirty = true;                        
                 }
             }
             // 三击显示消息
@@ -307,6 +398,16 @@ esp_err_t display_task_start(void)
     ctx->page.home.rx_bytes = 0;
     ctx->page.home.tx_bytes = 0;
 
+    ctx->page.uart.selected_index = 0;
+    ctx->page.uart.display_num =4;
+    ctx->page.uart.baudrate_num = sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0]);
+    for (int i = 0; i < ctx->page.uart.baudrate_num; i++) {
+        if (ctx->page.home.baudrate == s_supported_baudrates[i]) {
+            ctx->page.uart.selected_index = i;
+            break;
+        }
+    }
+
     // 创建显示任务
     BaseType_t ret = xTaskCreate(
         display_task,
@@ -386,6 +487,13 @@ static void display_task(void *arg)
             ctx->popup.dirty = true;
         }
 
+        // 检查页面是否超时
+        if (ctx->page.current_page != PAGE_HOME && 
+            uptime_after(now, ctx->page.page_expried_time)) {
+            ctx->page.current_page = PAGE_HOME;
+            ctx->page.dirty = true;
+        }
+
         // 刷新显示
         if (ctx->page.dirty || ctx->popup.dirty) 
         {            
@@ -397,7 +505,17 @@ static void display_task(void *arg)
                 case PAGE_HOME:
                     draw_home_page(ctx);
                     break;
-                default:
+                case PAGE_UART:
+                    draw_uart_page(ctx);
+                    break;
+                case PAGE_NETWORK:
+                    draw_network_page(ctx);
+                    break;
+                case PAGE_HELP: 
+                    draw_help_page(ctx);
+                    break;
+                default:    
+                    draw_home_page(ctx);                
                     break;
             }
 
@@ -747,3 +865,61 @@ static void draw_popup(display_context_t* ctx)
             break;
     }
 }
+
+
+static void draw_uart_page(display_context_t* ctx)
+{
+    // 定义布局参数
+    const int left_width = 20;  // 左侧区域宽度
+    const int divider_width = 2;  // 分隔线宽度
+    const int line_height = 16;  // 每行高度(8x16字体)
+    const int right_start_x = left_width + divider_width + 10;  // 右侧内容起始x坐标(加10像素间距)
+    const int right_icon_width = 16;
+    const int start_y = 0;  // 从顶部开始显示
+    
+    // 绘制左侧串口图标
+    const int icon_x = (left_width - 16) / 2;  // 16是图标宽度，水平居中
+    const int icon_y = (64 - 16) / 2;  // 垂直居中显示图标
+    lcd_display_mono_img(ctx->lcd_handle, icon_x, icon_y, LCD_IMG(serial), false);
+    
+    // 绘制分隔线
+    lcd_draw_vertical_line(ctx->lcd_handle, left_width, 0, 64, divider_width, false);
+    
+    // 计算显示的波特率起始索引
+    int start_index = 0;
+    if (ctx->page.uart.selected_index >= ctx->page.uart.display_num) {
+        start_index = ctx->page.uart.selected_index - ctx->page.uart.display_num + 1;
+    }
+
+    // 显示波特率列表
+    for (int i = 0; i < ctx->page.uart.display_num; i++) 
+    {
+        if ((start_index + i) >= ctx->page.uart.baudrate_num) {
+            ESP_LOGE(TAG, "uart baudrate index out of range");
+            return;
+        }
+
+        char buffer[16];
+        snprintf(buffer, sizeof(buffer), "%u", (unsigned int)s_supported_baudrates[start_index + i]);
+        
+        // 如果是当前波特率，在行首显示'>'符号
+        if ((start_index + i) == ctx->page.uart.selected_index) {
+            lcd_display_string(ctx->lcd_handle, right_start_x, start_y + i * line_height, ">", LCD_FONT(ascii_8x16), false);
+        }
+        
+        // 显示波特率值
+        lcd_display_string(ctx->lcd_handle, right_start_x + right_icon_width, start_y + i * line_height, buffer, LCD_FONT(ascii_8x16), false);
+    }
+}
+
+static void draw_network_page(display_context_t* ctx)
+{
+    // 绘制网络页面
+}
+
+static void draw_help_page(display_context_t* ctx)
+{
+    // 绘制帮助页面
+    lcd_display_mono_img(ctx->lcd_handle, 32, 0, LCD_IMG(qrcode), false);
+}
+
