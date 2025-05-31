@@ -57,6 +57,17 @@ typedef struct {
     uint32_t current_sequence;
     wifi_connection_record_t records[WIFI_STATION_MAX_RECORDS];
     uint8_t record_count;
+    
+    // 新增扫描相关字段
+    bool scan_in_progress;           // 扫描是否正在进行
+    bool scan_done;                  // 扫描是否完成
+    uint16_t last_scan_ap_count;     // 上次扫描到的AP数量
+    wifi_ap_record_t *last_scan_result; // 上次扫描结果
+    
+    // 新增扫描协调字段
+    bool user_scan_requested;        // 用户是否请求了异步扫描
+    bool background_scan_requested;  // 后台扫描是否被请求
+    TickType_t scan_start_time;      // 扫描开始时间
 } wifi_station_ctx_t;
 
 static wifi_station_ctx_t s_wifi_ctx = {0};
@@ -70,6 +81,7 @@ static esp_err_t load_sequence_from_nvs(void);
 static esp_err_t save_sequence_to_nvs(void);
 static int find_best_network(wifi_ap_record_t *ap_list, uint16_t ap_count);
 static void add_or_update_record_internal(const char *ssid, const char *password, bool ever_success);
+static esp_err_t start_scan_internal(bool is_background_scan);
 
 esp_err_t wifi_station_init(void)
 {
@@ -79,6 +91,15 @@ esp_err_t wifi_station_init(void)
     }
 
     memset(&s_wifi_ctx, 0, sizeof(s_wifi_ctx));
+
+    // 初始化扫描相关字段
+    s_wifi_ctx.scan_in_progress = false;
+    s_wifi_ctx.scan_done = false;
+    s_wifi_ctx.last_scan_ap_count = 0;
+    s_wifi_ctx.last_scan_result = NULL;
+    s_wifi_ctx.user_scan_requested = false;
+    s_wifi_ctx.background_scan_requested = false;
+    s_wifi_ctx.scan_start_time = 0;
 
     // 创建互斥锁
     s_wifi_ctx.mutex = xSemaphoreCreateMutex();
@@ -139,6 +160,12 @@ esp_err_t wifi_station_deinit(void)
 {
     if (!s_wifi_ctx.initialized) {
         return ESP_OK;
+    }
+
+    // 释放扫描结果
+    if (s_wifi_ctx.last_scan_result) {
+        free(s_wifi_ctx.last_scan_result);
+        s_wifi_ctx.last_scan_result = NULL;
     }
 
     // 删除后台任务
@@ -475,6 +502,58 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         ESP_LOGI(TAG, "WiFi station started");
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE) {
+        wifi_event_sta_scan_done_t *event = (wifi_event_sta_scan_done_t *)event_data;
+        
+        xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+        s_wifi_ctx.scan_in_progress = false;
+        
+        if (event->status == 0) {
+            // 扫描成功
+            uint16_t ap_count = 0;
+            ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
+            
+            // 释放之前的扫描结果
+            if (s_wifi_ctx.last_scan_result) {
+                free(s_wifi_ctx.last_scan_result);
+                s_wifi_ctx.last_scan_result = NULL;
+            }
+            
+            if (ap_count > 0) {
+                s_wifi_ctx.last_scan_result = malloc(sizeof(wifi_ap_record_t) * ap_count);
+                if (s_wifi_ctx.last_scan_result) {
+                    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, s_wifi_ctx.last_scan_result));
+                    s_wifi_ctx.last_scan_ap_count = ap_count;
+                    s_wifi_ctx.scan_done = true;
+                    
+                    const char* scan_type = "";
+                    if (s_wifi_ctx.user_scan_requested && s_wifi_ctx.background_scan_requested) {
+                        scan_type = "user+background";
+                    } else if (s_wifi_ctx.user_scan_requested) {
+                        scan_type = "user";
+                    } else if (s_wifi_ctx.background_scan_requested) {
+                        scan_type = "background";
+                    }
+                    
+                    ESP_LOGI(TAG, "Async scan (%s) completed, found %d APs", scan_type, ap_count);
+                } else {
+                    ESP_LOGE(TAG, "Failed to allocate memory for scan results");
+                    s_wifi_ctx.scan_done = false;
+                }
+            } else {
+                s_wifi_ctx.scan_done = true;
+                s_wifi_ctx.last_scan_ap_count = 0;
+                ESP_LOGI(TAG, "Async scan completed, no APs found");
+            }
+        } else {
+            ESP_LOGW(TAG, "Scan failed with status %d", event->status);
+            s_wifi_ctx.scan_done = false;
+        }
+        
+        // 重置扫描请求标志
+        s_wifi_ctx.user_scan_requested = false;
+        s_wifi_ctx.background_scan_requested = false;
+        xSemaphoreGive(s_wifi_ctx.mutex);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* event = (wifi_event_sta_disconnected_t*) event_data;
         ESP_LOGI(TAG, "Disconnected from WiFi SSID:%s, reason:%d", event->ssid, event->reason);
@@ -544,66 +623,65 @@ static void background_task(void *pvParameters)
             // 自动连接一次后, 自动连接标志位清零
             s_wifi_ctx.auto_connect_one_shot = false;
 
-            // 执行WiFi扫描
-            wifi_scan_config_t scan_config = {
-                .ssid = NULL,
-                .bssid = NULL,
-                .channel = 0,
-                .show_hidden = false
-            };
-            
-            uint32_t scan_start_time = xTaskGetTickCount();
-            if (esp_wifi_scan_start(&scan_config, true) == ESP_OK) {
-                ESP_LOGD(TAG, "Scan completed, took %lu ms", (xTaskGetTickCount() - scan_start_time) * portTICK_PERIOD_MS);
-                uint16_t ap_count = 0;
-                esp_wifi_scan_get_ap_num(&ap_count);
+            // 执行WiFi扫描 - 使用统一的扫描协调机制
+            if (start_scan_internal(true) == ESP_OK) {  // true表示后台扫描
+                // 等待扫描完成，最多等待10秒
+                const TickType_t max_wait = pdMS_TO_TICKS(10000);
+                TickType_t wait_start = xTaskGetTickCount();
                 
-                if (ap_count > 0) {
-                    wifi_ap_record_t *ap_list = malloc(sizeof(wifi_ap_record_t) * ap_count);
-                    if (ap_list) {
-                        esp_wifi_scan_get_ap_records(&ap_count, ap_list);
-
-                        ESP_LOGD(TAG, "Found %d WiFi networks", ap_count);
-                        for (uint16_t i = 0; i < ap_count; i++) {
-                            ESP_LOGD(TAG, " ssid: \"%s\", rssi: %d", ap_list[i].ssid, ap_list[i].rssi);
-                        }
-                        
-                        // 查找最佳网络进行连接
-                        int best_index = find_best_network(ap_list, ap_count);
-                        if (best_index >= 0) {
-                            // 查找对应的连接记录
-                            xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
-                            uint8_t i;
-                            for (i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
-                                if (s_wifi_ctx.records[i].valid && 
-                                    strcmp(s_wifi_ctx.records[i].ssid, (char*)ap_list[best_index].ssid) == 0) {
-                                    
-                                    ESP_LOGI(TAG, "Auto-connecting to: %s", s_wifi_ctx.records[i].ssid);
-                                    
-                                    // 复制连接信息，避免在释放锁后访问
-                                    char ssid_copy[WIFI_STATION_SSID_LEN];
-                                    char password_copy[WIFI_STATION_PASSWORD_LEN];
-                                    strncpy(ssid_copy, s_wifi_ctx.records[i].ssid, sizeof(ssid_copy) - 1);
-                                    strncpy(password_copy, s_wifi_ctx.records[i].password, sizeof(password_copy) - 1);
-                                    ssid_copy[sizeof(ssid_copy) - 1] = '\0';
-                                    password_copy[sizeof(password_copy) - 1] = '\0';
-                                    
-                                    xSemaphoreGive(s_wifi_ctx.mutex);
-                                    
-                                    // 尝试连接
-                                    wifi_station_connect(ssid_copy, password_copy);
-                                    break;
-                                }
-                            }
-                            if (i == WIFI_STATION_MAX_RECORDS) {
-                                xSemaphoreGive(s_wifi_ctx.mutex);
-                            }
-                        } else {
-                            ESP_LOGW(TAG, "No suitable network found, try in %d seconds", scan_interval / portTICK_PERIOD_MS);
-                        }
-                        
-                        free(ap_list);
+                while ((xTaskGetTickCount() - wait_start) < max_wait) {
+                    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+                    bool scan_done = s_wifi_ctx.scan_done;
+                    bool scan_in_progress = s_wifi_ctx.scan_in_progress;
+                    xSemaphoreGive(s_wifi_ctx.mutex);
+                    
+                    if (scan_done && !scan_in_progress) {
+                        break;
                     }
+                    vTaskDelay(pdMS_TO_TICKS(100)); // 100ms检查一次
+                }
+                
+                // 处理扫描结果
+                xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+                if (s_wifi_ctx.scan_done && s_wifi_ctx.last_scan_result && s_wifi_ctx.last_scan_ap_count > 0) {
+                    ESP_LOGD(TAG, "Background scan found %d WiFi networks", s_wifi_ctx.last_scan_ap_count);
+                    
+                    // 查找最佳网络进行连接
+                    int best_index = find_best_network(s_wifi_ctx.last_scan_result, s_wifi_ctx.last_scan_ap_count);
+                    if (best_index >= 0) {
+                        // 查找对应的连接记录
+                        uint8_t i;
+                        for (i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+                            if (s_wifi_ctx.records[i].valid && 
+                                strcmp(s_wifi_ctx.records[i].ssid, (char*)s_wifi_ctx.last_scan_result[best_index].ssid) == 0) {
+                                
+                                ESP_LOGI(TAG, "Auto-connecting to: %s", s_wifi_ctx.records[i].ssid);
+                                
+                                // 复制连接信息，避免在释放锁后访问
+                                char ssid_copy[WIFI_STATION_SSID_LEN];
+                                char password_copy[WIFI_STATION_PASSWORD_LEN];
+                                strncpy(ssid_copy, s_wifi_ctx.records[i].ssid, sizeof(ssid_copy) - 1);
+                                strncpy(password_copy, s_wifi_ctx.records[i].password, sizeof(password_copy) - 1);
+                                ssid_copy[sizeof(ssid_copy) - 1] = '\0';
+                                password_copy[sizeof(password_copy) - 1] = '\0';
+                                
+                                xSemaphoreGive(s_wifi_ctx.mutex);
+                                
+                                // 尝试连接
+                                wifi_station_connect(ssid_copy, password_copy);
+                                break;
+                            }
+                        }
+                        if (i == WIFI_STATION_MAX_RECORDS) {
+                            xSemaphoreGive(s_wifi_ctx.mutex);
+                        }
+                    } else {
+                        xSemaphoreGive(s_wifi_ctx.mutex);
+                        ESP_LOGW(TAG, "No suitable network found, try in %d seconds", scan_interval / 1000);
+                    }
+                } else {
+                    xSemaphoreGive(s_wifi_ctx.mutex);
+                    ESP_LOGW(TAG, "Background scan failed or no results");
                 }
             }
             
@@ -935,4 +1013,152 @@ void wifi_station_try_auto_connect_once(void)
     xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
     s_wifi_ctx.auto_connect_one_shot = true;
     xSemaphoreGive(s_wifi_ctx.mutex);
+}
+
+esp_err_t wifi_station_start_scan_async(void)
+{
+    if (!s_wifi_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return start_scan_internal(false);  // false表示用户扫描
+}
+
+esp_err_t wifi_station_get_scan_result(wifi_network_info_t *networks, uint16_t *count)
+{
+    if (!s_wifi_ctx.initialized || !networks || !count || *count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+    
+    if (s_wifi_ctx.scan_in_progress) {
+        xSemaphoreGive(s_wifi_ctx.mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!s_wifi_ctx.scan_done || !s_wifi_ctx.last_scan_result) {
+        xSemaphoreGive(s_wifi_ctx.mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint16_t output_count = (*count < s_wifi_ctx.last_scan_ap_count) ? *count : s_wifi_ctx.last_scan_ap_count;
+    
+    // 转换为组件格式
+    for (uint16_t i = 0; i < output_count; i++) {
+        strncpy(networks[i].ssid, (char*)s_wifi_ctx.last_scan_result[i].ssid, WIFI_STATION_SSID_LEN - 1);
+        networks[i].ssid[WIFI_STATION_SSID_LEN - 1] = '\0';
+        memcpy(networks[i].bssid, s_wifi_ctx.last_scan_result[i].bssid, WIFI_STATION_BSSID_LEN);
+        networks[i].rssi = s_wifi_ctx.last_scan_result[i].rssi;
+    }
+
+    *count = output_count;
+    xSemaphoreGive(s_wifi_ctx.mutex);
+
+    return ESP_OK;
+}
+
+bool wifi_station_is_scan_done(void)
+{
+    if (!s_wifi_ctx.initialized) {
+        return false;
+    }
+
+    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+    bool scan_done = s_wifi_ctx.scan_done && !s_wifi_ctx.scan_in_progress;
+    xSemaphoreGive(s_wifi_ctx.mutex);
+
+    return scan_done;
+}
+
+static esp_err_t start_scan_internal(bool is_background_scan)
+{
+    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+    
+    // 如果已经有扫描在进行中
+    if (s_wifi_ctx.scan_in_progress) {
+        if (is_background_scan) {
+            // 后台扫描请求，标记并共用结果
+            s_wifi_ctx.background_scan_requested = true;
+            xSemaphoreGive(s_wifi_ctx.mutex);
+            ESP_LOGI(TAG, "Background scan request queued, will share result");
+            return ESP_OK;
+        } else {
+            // 用户扫描请求，标记并共用结果
+            s_wifi_ctx.user_scan_requested = true;
+            xSemaphoreGive(s_wifi_ctx.mutex);
+            ESP_LOGI(TAG, "User scan request queued, will share result");
+            return ESP_OK;
+        }
+    }
+
+    // 配置扫描参数
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active.min = 100,
+        .scan_time.active.max = 300,
+    };
+
+    s_wifi_ctx.scan_in_progress = true;
+    s_wifi_ctx.scan_done = false;
+    s_wifi_ctx.scan_start_time = xTaskGetTickCount();
+    
+    if (is_background_scan) {
+        s_wifi_ctx.background_scan_requested = true;
+    } else {
+        s_wifi_ctx.user_scan_requested = true;
+    }
+    
+    xSemaphoreGive(s_wifi_ctx.mutex);
+
+    esp_err_t ret = esp_wifi_scan_start(&scan_config, false);  // 统一使用异步扫描
+    if (ret != ESP_OK) {
+        xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+        s_wifi_ctx.scan_in_progress = false;
+        if (is_background_scan) {
+            s_wifi_ctx.background_scan_requested = false;
+        } else {
+            s_wifi_ctx.user_scan_requested = false;
+        }
+        xSemaphoreGive(s_wifi_ctx.mutex);
+        ESP_LOGE(TAG, "Failed to start %s scan: %s", 
+                 is_background_scan ? "background" : "user", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Started %s scan", is_background_scan ? "background" : "user");
+    }
+
+    return ret;
+}
+
+esp_err_t wifi_station_scan_networks_async(wifi_network_info_t *networks, uint16_t *count, int timeout_ms)
+{
+    if (!s_wifi_ctx.initialized || !networks || !count || *count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // 启动异步扫描
+    esp_err_t ret = start_scan_internal(false);  // false表示用户扫描
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // 计算超时时间
+    TickType_t start_time = xTaskGetTickCount();
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    
+    // 等待扫描完成或超时
+    while (!wifi_station_is_scan_done()) {
+        if ((xTaskGetTickCount() - start_time) >= timeout_ticks) {
+            ESP_LOGW(TAG, "Scan timeout after %d ms", timeout_ms);
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));  // 100ms检查一次
+    }
+
+    // 获取扫描结果
+    return wifi_station_get_scan_result(networks, count);
 }

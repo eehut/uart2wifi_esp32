@@ -100,7 +100,7 @@ esp_err_t wifi_station_deinit(void);
 esp_err_t wifi_station_get_status(wifi_connection_status_t *status);
 
 /**
- * @brief 扫描WiFi网络列表(同步)
+ * @brief 扫描WiFi网络列表(同步) (不推荐使用, 不开启WIFI后台任务可以使用)
  * 
  * @param[out] networks 网络列表缓冲区
  * @param[in,out] count 输入时为缓冲区大小，输出时为实际扫描到的网络数量
@@ -108,6 +108,53 @@ esp_err_t wifi_station_get_status(wifi_connection_status_t *status);
  *         其他错误码 失败
  */
 esp_err_t wifi_station_scan_networks(wifi_network_info_t *networks, uint16_t *count);
+
+
+/**
+ * @brief 异步启动WiFi扫描
+ * @return
+ *     - ESP_OK: 成功启动扫描
+ *     - ESP_ERR_INVALID_STATE: WiFi组件未初始化
+ *     - ESP_ERR_WIFI_SCAN_IN_PROGRESS: 已有扫描正在进行中
+ */
+esp_err_t wifi_station_start_scan_async(void);
+
+
+/**
+ * @brief 异步扫描WiFi网络列表
+ * 
+ * @param networks 网络列表缓冲区
+ * @param count 输入时为缓冲区大小，输出时为实际扫描到的网络数量
+ * @param timeout_ms 超时时间，单位为毫秒
+ * @return 
+ *     - ESP_OK: 成功启动扫描
+ *     - ESP_ERR_INVALID_STATE: WiFi组件未初始化
+ *     - ESP_ERR_WIFI_SCAN_IN_PROGRESS: 已有扫描正在进行中
+ *     - ESP_ERR_INVALID_ARG: 参数无效
+ *     - ESP_ERR_NO_MEM: 内存不足
+ *     - ESP_ERR_TIMEOUT: 扫描超时
+ */
+esp_err_t wifi_station_scan_networks_async(wifi_network_info_t *networks, uint16_t *count, int timeout_ms);
+
+/**
+ * @brief 获取异步扫描结果
+ * @param[out] networks 用于存储扫描到的网络信息的数组
+ * @param[in,out] count 输入时表示networks数组的大小,输出时表示实际扫描到的网络数量
+ * @return
+ *     - ESP_OK: 成功获取扫描结果
+ *     - ESP_ERR_INVALID_STATE: 未执行扫描或扫描未完成
+ *     - ESP_ERR_INVALID_ARG: 参数无效
+ *     - ESP_ERR_NO_MEM: 内存不足
+ */
+esp_err_t wifi_station_get_scan_result(wifi_network_info_t *networks, uint16_t *count); 
+
+/**
+ * @brief 检查异步扫描是否完成
+ * @return
+ *     - true: 扫描已完成，可以获取结果
+ *     - false: 扫描未完成或未开始扫描
+ */
+bool wifi_station_is_scan_done(void);
 
 /**
  * @brief 断开当前WiFi连接

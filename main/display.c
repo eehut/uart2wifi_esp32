@@ -57,6 +57,15 @@ typedef enum {
 }display_popup_t;
 
 
+typedef enum {
+    MSG_ID_NETWORK_ALREADY_CONNECTED = 0,
+    MSG_ID_NETWORK_NOT_AVAILABLE,
+    MSG_ID_START_CONNECTING_NETWORK,
+    MSG_ID_NO_SAVED_NETWORK,
+    MSG_ID_START_SCANING_NETWORK,
+}popup_msg_id_t;
+
+
 // 主页数据结构
 typedef struct 
 {
@@ -84,7 +93,7 @@ typedef struct {
 
 // 消息框数据结构
 typedef struct {
-    char message[32];
+    popup_msg_id_t msg_id;
 }popup_msg_data_t;
 
 // 菜单框数据结构       
@@ -112,7 +121,9 @@ typedef struct {
     
     struct {
         bool dirty;
-        display_page_t current_page;        
+        bool page_changed;
+        display_page_t current_page;    
+        display_page_t previous_page;
         sys_tick_t page_expried_time;
         page_home_data_t home;
         page_uart_data_t uart;
@@ -156,6 +167,9 @@ static void draw_help_page(display_context_t* ctx);
 // 绘制弹出框
 static void draw_popup(display_context_t* ctx);
 
+// 显示弹出消息
+static void active_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id);
+
 // 更新主页动画
 static bool update_home_animation(display_context_t* ctx);
 
@@ -172,7 +186,18 @@ static inline display_context_t* get_context(void)
     return &s_display_context;
 }
 
+// 切换页面
+static void switch_page(display_context_t* ctx, display_page_t target)
+{
+    if (ctx->page.current_page == target) {
+        return;
+    }
 
+    ctx->page.previous_page = ctx->page.current_page;
+    ctx->page.current_page = target;    
+    ctx->page.dirty = true;
+    ctx->page.page_changed = true;
+}
 
 
 /**s
@@ -269,15 +294,15 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
                         switch (ctx->popup.menu.selected_index) {
                             case _MENU_ENTRY_UART:
                                 ESP_LOGI(TAG, "enter uart menu");
-                                ctx->page.current_page = PAGE_UART;
+                                switch_page(ctx, PAGE_UART);
                                 break;
                             case _MENU_ENTRY_NETWORK:
                                 ESP_LOGI(TAG, "enter network menu");
-                                ctx->page.current_page = PAGE_NETWORK;
+                                switch_page(ctx, PAGE_NETWORK);
                                 break;
                             case _MENU_ENTRY_HELP:
                                 ESP_LOGI(TAG, "enter help menu");
-                                ctx->page.current_page = PAGE_HELP;                                
+                                switch_page(ctx, PAGE_HELP);                                
                                 break;
                             default:
                                 break;
@@ -297,8 +322,7 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
                 } 
                 else if (ctx->page.current_page == PAGE_HELP) 
                 {
-                    ctx->page.current_page = PAGE_HOME;
-                    ctx->page.dirty = true;                        
+                    switch_page(ctx, PAGE_HOME);
                 }
                 else if (ctx->page.current_page == PAGE_UART) 
                 {
@@ -307,22 +331,20 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
                     // TODO: 保存到配置
                     ESP_LOGI(TAG, "TODO: apply baudrate: %u", ctx->page.home.baudrate);
                     // 返回主页
-                    ctx->page.current_page = PAGE_HOME;
-                    ctx->page.dirty = true;                        
+                    switch_page(ctx, PAGE_HOME);
                 }
                 else if (ctx->page.current_page == PAGE_NETWORK) 
                 {
-                    ctx->page.current_page = PAGE_HOME;
-                    ctx->page.dirty = true;                        
+                    switch_page(ctx, PAGE_HOME);
                 }
             }
             // 三击显示消息
-            else if (data->data.button.click_count == 3) {
-                ctx->popup.current_popup = POPUP_MSG;
-                //snprintf(ctx->popup.msg.message, sizeof(ctx->popup.msg.message), "TODO");
-                ctx->popup.dirty = true;
-                ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭
-            }
+            // else if (data->data.button.click_count == 3) {
+            //     ctx->popup.current_popup = POPUP_MSG;
+            //     //snprintf(ctx->popup.msg.message, sizeof(ctx->popup.msg.message), "TODO");
+            //     ctx->popup.dirty = true;
+            //     ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭
+            // }
             break;
     }
 }
@@ -389,6 +411,7 @@ esp_err_t display_task_start(void)
     // 初始化页面数据
     ctx->page.dirty = true;
     ctx->page.current_page = PAGE_HOME;
+    ctx->page.previous_page = PAGE_HOME;
     ctx->page.page_expried_time = 0;
     ctx->page.home.wifi_state = WIFI_STATE_DISCONNECTED;
     ctx->page.home.signal_level = 0;
@@ -490,8 +513,25 @@ static void display_task(void *arg)
         // 检查页面是否超时
         if (ctx->page.current_page != PAGE_HOME && 
             uptime_after(now, ctx->page.page_expried_time)) {
-            ctx->page.current_page = PAGE_HOME;
-            ctx->page.dirty = true;
+            switch_page(ctx, PAGE_HOME);
+        }
+
+        // 检查是否发生了切页 
+        if (ctx->page.page_changed)
+        {
+            ESP_LOGI(TAG, "page changed from %d to %d", ctx->page.previous_page, ctx->page.current_page);
+            ctx->page.page_changed = false;
+
+            if (ctx->page.current_page == PAGE_NETWORK) {
+                // 执行相关任务,如果有的话 
+                if (ctx->popup.msg.msg_id == MSG_ID_NETWORK_ALREADY_CONNECTED) {
+                    active_popup_msg(ctx, MSG_ID_NETWORK_NOT_AVAILABLE);
+                } else if (ctx->popup.msg.msg_id == MSG_ID_NETWORK_NOT_AVAILABLE) {
+                    active_popup_msg(ctx, MSG_ID_START_CONNECTING_NETWORK);
+                } else if (ctx->popup.msg.msg_id == MSG_ID_START_CONNECTING_NETWORK) {
+                    active_popup_msg(ctx, MSG_ID_NETWORK_ALREADY_CONNECTED);
+                }
+            }
         }
 
         // 刷新显示
@@ -761,6 +801,56 @@ static void draw_home_page(display_context_t* ctx)
 #define POPUP_FRAME_X      (POPUP_X + POPUP_MARGIN)
 #define POPUP_FRAME_Y      (POPUP_Y + POPUP_MARGIN)
 
+
+static void draw_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id)
+{
+    const char *line1 = NULL;
+    const char *line2 = NULL;
+
+    if (msg_id == MSG_ID_NETWORK_ALREADY_CONNECTED) {
+        line1 = "Network";
+        line2 = "Connected";
+    } else if (msg_id == MSG_ID_NETWORK_NOT_AVAILABLE) {
+        line1 = "Network";
+        line2 = "Not Exist";
+    } else if (msg_id == MSG_ID_START_CONNECTING_NETWORK) {
+        line1 = "Start";
+        line2 = "Connecting";
+    } else if (msg_id == MSG_ID_NO_SAVED_NETWORK) {
+        line1 = "No Saved";
+        line2 = "Network";
+    } else if (msg_id == MSG_ID_START_SCANING_NETWORK) {
+        line1 = "Start";
+        line2 = "Scanning";
+    } else {
+        ESP_LOGE(TAG, "invalid popup message id: %d", msg_id);
+        return;
+    }
+
+    if (line1) {
+        // 计算第一行文本宽度并居中显示
+        int text_width = strlen(line1) * 8; // ascii_8x16字体宽度为8
+        int x = POPUP_FRAME_X + (POPUP_FRAME_WIDTH - text_width) / 2;
+        lcd_display_string(ctx->lcd_handle,
+            x,
+            POPUP_FRAME_Y + POPUP_PADDING,
+            line1,
+            LCD_FONT(ascii_8x16), false);
+    }
+
+    if (line2) {
+        // 计算第二行文本宽度并居中显示
+        int text_width = strlen(line2) * 8; // ascii_8x16字体宽度为8
+        int x = POPUP_FRAME_X + (POPUP_FRAME_WIDTH - text_width) / 2;
+        lcd_display_string(ctx->lcd_handle,
+            x,
+            POPUP_FRAME_Y + POPUP_PADDING + 16, // 第二行Y坐标增加16(字体高度)
+            line2,
+            LCD_FONT(ascii_8x16), false);
+   }
+}
+
+
 /**
  * @brief 绘制弹出框
  * 
@@ -851,14 +941,7 @@ static void draw_popup(display_context_t* ctx)
         }
         case POPUP_MSG:
         {
-            // 显示消息文本
-            lcd_display_string(ctx->lcd_handle,
-                POPUP_FRAME_X + POPUP_PADDING,
-                POPUP_FRAME_Y + POPUP_PADDING,
-                "TODO",
-                LCD_FONT(ascii_8x16),
-                false
-            );
+            draw_popup_msg(ctx, ctx->popup.msg.msg_id);
             break;
         }
         default:
@@ -914,7 +997,21 @@ static void draw_uart_page(display_context_t* ctx)
 
 static void draw_network_page(display_context_t* ctx)
 {
-    // 绘制网络页面
+    // 定义布局参数
+    const int left_width = 20;  // 左侧区域宽度
+    const int divider_width = 2;  // 分隔线宽度
+    // const int line_height = 16;  // 每行高度(8x16字体)
+    // const int right_start_x = left_width + divider_width + 10;  // 右侧内容起始x坐标(加10像素间距)
+    // const int right_icon_width = 16;
+    // const int start_y = 0;  // 从顶部开始显示
+    
+    // 绘制左侧串口图标
+    const int icon_x = (left_width - 16) / 2;  // 16是图标宽度，水平居中
+    const int icon_y = (64 - 16) / 2;  // 垂直居中显示图标
+    lcd_display_mono_img(ctx->lcd_handle, icon_x, icon_y, LCD_IMG(network), false);
+    
+    // 绘制分隔线
+    lcd_draw_vertical_line(ctx->lcd_handle, left_width, 0, 64, divider_width, false);
 }
 
 static void draw_help_page(display_context_t* ctx)
@@ -923,3 +1020,16 @@ static void draw_help_page(display_context_t* ctx)
     lcd_display_mono_img(ctx->lcd_handle, 32, 0, LCD_IMG(qrcode), false);
 }
 
+
+/// 显示弹出消息, 消息显示3秒后自动消失
+/// 有条件显示, 当前不在菜单栏才可以显示消息.
+static void active_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id)
+{
+    if (ctx->popup.current_popup == POPUP_MENU) {
+        return;
+    }
+
+    ctx->popup.current_popup = POPUP_MSG;
+    ctx->popup.msg.msg_id = msg_id;
+    ctx->popup.popup_expried_time = uptime() + 3000;
+}

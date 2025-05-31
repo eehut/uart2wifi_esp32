@@ -378,7 +378,7 @@ static void start_wifi_scan_and_connect(void)
 
     uint16_t count = sizeof(s_cli_sm.scan_results) / sizeof(s_cli_sm.scan_results[0]);
     
-    esp_err_t ret = wifi_station_scan_networks(s_cli_sm.scan_results, &count);
+    esp_err_t ret = wifi_station_scan_networks_async(s_cli_sm.scan_results, &count, 10000);
     if (ret == ESP_OK && (count > 0)) {
         s_cli_sm.scan_success = true;
         s_cli_sm.scan_count = count;
@@ -464,7 +464,7 @@ static void show_wifi_networks(void)
         } else {
             printf("Found %d networks:\n", count);
             for (uint8_t i = 0; i < count; i++) {
-                printf("%2d. %-32s seq:%" PRIu32 "\n", i + 1, sm->wifi_records[i].ssid, sm->wifi_records[i].sequence);
+                printf("%d. %-32s seq:%" PRIu32 "\n", i + 1, sm->wifi_records[i].ssid, sm->wifi_records[i].sequence);
             }
         }
     } else {
@@ -500,7 +500,7 @@ static void show_wifi_network_delete_menu(void)
     } else {
         printf("Found %d networks:\n", count);
         for (uint8_t i = 0; i < count; i++) {
-            printf("%2d. %-32s\n", i + 1, sm->wifi_records[i].ssid);
+            printf("%d. %-32s\n", i + 1, sm->wifi_records[i].ssid);
         }
         printf("--------\n");
         printf("0. Exit\n");
