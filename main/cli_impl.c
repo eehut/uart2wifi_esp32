@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <sys/_intsup.h>
 
 const char *TAG = "cli_impl";
 
@@ -672,12 +673,17 @@ static void handle_wifi_scan_and_connect(const char *input)
         strncpy(sm->input_buffer, input, sizeof(sm->input_buffer) - 1);
         sm->input_buffer[sizeof(sm->input_buffer) - 1] = '\0';
 
-        printf("\nStart connecting to %s...\n", sm->scan_results[sm->input_index].ssid);
-        esp_err_t ret = wifi_station_connect(sm->scan_results[sm->input_index].ssid, sm->input_buffer);
-        if (ret == ESP_OK) {
-            printf("Connected to %s successfully\n", sm->scan_results[sm->input_index].ssid);
-        }else {
-            printf("***Failed to connect to %s: %s\n", sm->scan_results[sm->input_index].ssid, esp_err_to_name(ret));
+        int retry = 2;
+        while (retry > 0) {
+            printf("\nStart connecting to %s...\n", sm->scan_results[sm->input_index].ssid);
+            esp_err_t ret = wifi_station_connect(sm->scan_results[sm->input_index].ssid, sm->input_buffer);
+            if (ret == ESP_OK) {
+                printf("Connected to %s successfully\n", sm->scan_results[sm->input_index].ssid);
+                break;
+            }else {
+                printf("***Failed to connect to %s: %s\n", sm->scan_results[sm->input_index].ssid, esp_err_to_name(ret));
+            }
+            retry--;
         }
         printf("--------\n");
         printf("Input [Enter] to return\n");

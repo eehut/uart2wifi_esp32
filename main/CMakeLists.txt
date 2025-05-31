@@ -10,4 +10,5 @@ target_compile_definitions(${ext_gpio} PRIVATE
                     CONFIG_EXT_GPIO_MAX_NUM=4
                     CONFIG_EXT_BUTTON_MAX_NUM=2
                     CONFIG_EXT_GPIO_CACHE_SIZE=4
+                    CONFIG_EXT_BUTTON_DEFAULT_LONG_PRESSED_SECOND=2
 )

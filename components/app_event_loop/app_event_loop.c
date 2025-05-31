@@ -37,7 +37,7 @@ esp_err_t app_event_loop_init(int queue_size, int task_priority)
         .queue_size = queue_size,
         .task_name = "app_events",
         .task_priority = task_priority,
-        .task_stack_size = 2048,
+        .task_stack_size = 4096,
         .task_core_id = tskNO_AFFINITY
     };
 

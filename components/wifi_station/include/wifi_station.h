@@ -219,6 +219,18 @@ esp_err_t wifi_station_set_auto_connect(bool enable);
  */
 void wifi_station_try_auto_connect_once(void);
 
+/**
+ * @brief 重置指定网络的状态
+ * 
+ * 将指定网络的ever_success标记重置为true，清除user_disconnected标记，
+ * 并重置重试状态。适用于网络密码修复后重新尝试连接的场景。
+ * 
+ * @param[in] ssid 要重置状态的网络SSID
+ * @return ESP_OK 成功
+ *         ESP_ERR_NOT_FOUND 未找到指定的网络记录
+ *         其他错误码 失败
+ */
+esp_err_t wifi_station_reset_network_status(const char *ssid);
 
 #ifdef __cplusplus
 }

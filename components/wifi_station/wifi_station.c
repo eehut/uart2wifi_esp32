@@ -68,6 +68,12 @@ typedef struct {
     bool user_scan_requested;        // 用户是否请求了异步扫描
     bool background_scan_requested;  // 后台扫描是否被请求
     TickType_t scan_start_time;      // 扫描开始时间
+    
+    // 新增重试机制字段
+    char retry_target_ssid[WIFI_STATION_SSID_LEN];  // 当前尝试连接的网络SSID
+    uint8_t retry_count;             // 当前网络的重试次数
+    uint8_t consecutive_failures;    // 当前网络的连续失败次数
+    bool use_short_interval;         // 是否使用短间隔（10秒）
 } wifi_station_ctx_t;
 
 static wifi_station_ctx_t s_wifi_ctx = {0};
@@ -100,6 +106,12 @@ esp_err_t wifi_station_init(void)
     s_wifi_ctx.user_scan_requested = false;
     s_wifi_ctx.background_scan_requested = false;
     s_wifi_ctx.scan_start_time = 0;
+
+    // 初始化重试机制字段
+    memset(s_wifi_ctx.retry_target_ssid, 0, sizeof(s_wifi_ctx.retry_target_ssid));
+    s_wifi_ctx.retry_count = 0;
+    s_wifi_ctx.consecutive_failures = 0;
+    s_wifi_ctx.use_short_interval = true;  // 默认使用短间隔
 
     // 创建互斥锁
     s_wifi_ctx.mutex = xSemaphoreCreateMutex();
@@ -361,7 +373,8 @@ esp_err_t wifi_station_connect(const char *ssid, const char *password)
     if (password) {
         strncpy((char*)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
     }
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    // 设置为WIFI_AUTH_OPEN以允许自动检测认证模式
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
     ESP_LOGD(TAG, "Started WiFi connection, ssid: %s, password: %s, authmode: %d", ssid, password ? password : "", wifi_config.sta.threshold.authmode);
 
@@ -577,6 +590,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         memcpy(s_wifi_ctx.current_bssid, event->bssid, WIFI_STATION_BSSID_LEN);
         s_wifi_ctx.connected_time = esp_log_timestamp() / 1000;
         
+        // 重置重试机制状态
+        memset(s_wifi_ctx.retry_target_ssid, 0, sizeof(s_wifi_ctx.retry_target_ssid));
+        s_wifi_ctx.retry_count = 0;
+        s_wifi_ctx.consecutive_failures = 0;
+        s_wifi_ctx.use_short_interval = true;
+        
         // 获取RSSI
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
@@ -608,7 +627,8 @@ static void background_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Background WiFi task started");
     
-    const TickType_t scan_interval = pdMS_TO_TICKS(30000); // 30秒扫描一次
+    const TickType_t short_scan_interval = pdMS_TO_TICKS(10000); // 10秒短间隔
+    const TickType_t long_scan_interval = pdMS_TO_TICKS(30000);  // 30秒长间隔
 
     while (1) {
         TickType_t current_time = xTaskGetTickCount();
@@ -618,7 +638,12 @@ static void background_task(void *pvParameters)
             s_wifi_ctx.state == WIFI_STATE_DISCONNECTED && 
             current_time > s_wifi_ctx.next_scan_time)) {
             
-            ESP_LOGI(TAG, "Background scan for auto-connect(%s)", s_wifi_ctx.auto_connect_one_shot ? "one-shot" : "enabled");
+            // 确定使用的扫描间隔
+            TickType_t scan_interval = s_wifi_ctx.use_short_interval ? short_scan_interval : long_scan_interval;
+            
+            ESP_LOGI(TAG, "Background scan for auto-connect(%s), interval: %ds", 
+                    s_wifi_ctx.auto_connect_one_shot ? "one-shot" : "enabled",
+                    (int)(scan_interval / pdMS_TO_TICKS(1000)));
             
             // 自动连接一次后, 自动连接标志位清零
             s_wifi_ctx.auto_connect_one_shot = false;
@@ -655,20 +680,71 @@ static void background_task(void *pvParameters)
                             if (s_wifi_ctx.records[i].valid && 
                                 strcmp(s_wifi_ctx.records[i].ssid, (char*)s_wifi_ctx.last_scan_result[best_index].ssid) == 0) {
                                 
-                                ESP_LOGI(TAG, "Auto-connecting to: %s", s_wifi_ctx.records[i].ssid);
+                                char *target_ssid = (char*)s_wifi_ctx.last_scan_result[best_index].ssid;
                                 
-                                // 复制连接信息，避免在释放锁后访问
-                                char ssid_copy[WIFI_STATION_SSID_LEN];
-                                char password_copy[WIFI_STATION_PASSWORD_LEN];
-                                strncpy(ssid_copy, s_wifi_ctx.records[i].ssid, sizeof(ssid_copy) - 1);
-                                strncpy(password_copy, s_wifi_ctx.records[i].password, sizeof(password_copy) - 1);
-                                ssid_copy[sizeof(ssid_copy) - 1] = '\0';
-                                password_copy[sizeof(password_copy) - 1] = '\0';
+                                // 检查是否是同一个网络的重试
+                                bool is_same_network = (strlen(s_wifi_ctx.retry_target_ssid) > 0 && 
+                                                       strcmp(s_wifi_ctx.retry_target_ssid, target_ssid) == 0);
                                 
-                                xSemaphoreGive(s_wifi_ctx.mutex);
+                                if (!is_same_network) {
+                                    // 新网络，重置重试计数
+                                    strncpy(s_wifi_ctx.retry_target_ssid, target_ssid, sizeof(s_wifi_ctx.retry_target_ssid) - 1);
+                                    s_wifi_ctx.retry_target_ssid[sizeof(s_wifi_ctx.retry_target_ssid) - 1] = '\0';
+                                    s_wifi_ctx.retry_count = 0;
+                                    s_wifi_ctx.consecutive_failures = 0;
+                                    s_wifi_ctx.use_short_interval = true;
+                                }
                                 
-                                // 尝试连接
-                                wifi_station_connect(ssid_copy, password_copy);
+                                // 检查重试次数
+                                if (s_wifi_ctx.retry_count < 3) {
+                                    s_wifi_ctx.retry_count++;
+                                    
+                                    ESP_LOGI(TAG, "Auto-connecting to: %s (attempt %d/3)", 
+                                            s_wifi_ctx.records[i].ssid, s_wifi_ctx.retry_count);
+                                    
+                                    // 复制连接信息，避免在释放锁后访问
+                                    char ssid_copy[WIFI_STATION_SSID_LEN];
+                                    char password_copy[WIFI_STATION_PASSWORD_LEN];
+                                    strncpy(ssid_copy, s_wifi_ctx.records[i].ssid, sizeof(ssid_copy) - 1);
+                                    strncpy(password_copy, s_wifi_ctx.records[i].password, sizeof(password_copy) - 1);
+                                    ssid_copy[sizeof(ssid_copy) - 1] = '\0';
+                                    password_copy[sizeof(password_copy) - 1] = '\0';
+                                    
+                                    xSemaphoreGive(s_wifi_ctx.mutex);
+                                    
+                                    // 尝试连接
+                                    esp_err_t connect_result = wifi_station_connect(ssid_copy, password_copy);
+                                    
+                                    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+                                    if (connect_result == ESP_OK) {
+                                        // 连接成功，重置重试状态
+                                        memset(s_wifi_ctx.retry_target_ssid, 0, sizeof(s_wifi_ctx.retry_target_ssid));
+                                        s_wifi_ctx.retry_count = 0;
+                                        s_wifi_ctx.consecutive_failures = 0;
+                                        s_wifi_ctx.use_short_interval = true;
+                                    } else {
+                                        // 连接失败，增加失败计数
+                                        s_wifi_ctx.consecutive_failures++;
+                                        
+                                        // 如果已经尝试3次都失败，标记网络为不可用
+                                        if (s_wifi_ctx.retry_count >= 3) {
+                                            ESP_LOGW(TAG, "Network %s failed 3 times, marking as unavailable", target_ssid);
+                                            s_wifi_ctx.records[i].ever_success = false;
+                                            save_records_to_nvs();
+                                            
+                                            // 重置重试状态，切换到长间隔
+                                            memset(s_wifi_ctx.retry_target_ssid, 0, sizeof(s_wifi_ctx.retry_target_ssid));
+                                            s_wifi_ctx.retry_count = 0;
+                                            s_wifi_ctx.consecutive_failures = 0;
+                                            s_wifi_ctx.use_short_interval = false;
+                                        }
+                                    }
+                                    xSemaphoreGive(s_wifi_ctx.mutex);
+                                } else {
+                                    // 已经重试3次，跳过此网络
+                                    ESP_LOGD(TAG, "Network %s already tried 3 times, skipping", target_ssid);
+                                    xSemaphoreGive(s_wifi_ctx.mutex);
+                                }
                                 break;
                             }
                         }
@@ -677,7 +753,8 @@ static void background_task(void *pvParameters)
                         }
                     } else {
                         xSemaphoreGive(s_wifi_ctx.mutex);
-                        ESP_LOGW(TAG, "No suitable network found, try in %d seconds", scan_interval / 1000);
+                        ESP_LOGW(TAG, "No suitable network found, try in %ds", 
+                                (int)(scan_interval / pdMS_TO_TICKS(1000)));
                     }
                 } else {
                     xSemaphoreGive(s_wifi_ctx.mutex);
@@ -685,7 +762,9 @@ static void background_task(void *pvParameters)
                 }
             }
             
-            s_wifi_ctx.next_scan_time = current_time + scan_interval;
+            // 设置下次扫描时间
+            TickType_t next_interval = s_wifi_ctx.use_short_interval ? short_scan_interval : long_scan_interval;
+            s_wifi_ctx.next_scan_time = current_time + next_interval;
         }
         
         vTaskDelay(pdMS_TO_TICKS(500)); // 500ms检查一次
@@ -1161,4 +1240,44 @@ esp_err_t wifi_station_scan_networks_async(wifi_network_info_t *networks, uint16
 
     // 获取扫描结果
     return wifi_station_get_scan_result(networks, count);
+}
+
+esp_err_t wifi_station_reset_network_status(const char *ssid)
+{
+    if (!s_wifi_ctx.initialized || !ssid) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+    
+    bool found = false;
+    for (uint8_t i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+        if (s_wifi_ctx.records[i].valid && 
+            strcmp(s_wifi_ctx.records[i].ssid, ssid) == 0) {
+            
+            // 重置网络状态
+            s_wifi_ctx.records[i].ever_success = true;
+            s_wifi_ctx.records[i].user_disconnected = false;
+            
+            // 如果这是当前重试的网络，也重置重试状态
+            if (strcmp(s_wifi_ctx.retry_target_ssid, ssid) == 0) {
+                memset(s_wifi_ctx.retry_target_ssid, 0, sizeof(s_wifi_ctx.retry_target_ssid));
+                s_wifi_ctx.retry_count = 0;
+                s_wifi_ctx.consecutive_failures = 0;
+                s_wifi_ctx.use_short_interval = true;
+            }
+            
+            found = true;
+            ESP_LOGI(TAG, "Reset network status for: %s", ssid);
+            break;
+        }
+    }
+    
+    if (found) {
+        save_records_to_nvs();
+    }
+    
+    xSemaphoreGive(s_wifi_ctx.mutex);
+    
+    return found ? ESP_OK : ESP_ERR_NOT_FOUND;
 }

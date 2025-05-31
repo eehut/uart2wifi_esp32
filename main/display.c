@@ -25,12 +25,21 @@
 static const char *TAG = "display";
 
 // 定义显示任务参数
-#define DISPLAY_TASK_STACK_SIZE    2048
+#define DISPLAY_TASK_STACK_SIZE    4096
 #define DISPLAY_TASK_PRIORITY      3
 #define DISPLAY_REFRESH_RATE_HZ    20  // 10Hz刷新率
 
 // 定义动画参数
 #define ANIMATION_UPDATE_MS        50 // 动画更新周期(ms)
+
+// 定义内部按键事件队列
+#define DISPLAY_BUTTON_QUEUE_SIZE  8
+
+// 内部按键事件结构
+typedef struct {
+    ext_gpio_event_data_t gpio_event;
+    int32_t event_id;
+} display_button_event_t;
 
 // 定义一个I2C的OLED驱动
 LCD_DEFINE_DRIVER_I2C(i2c, BUS_I2C0, 0x3C);
@@ -90,6 +99,23 @@ typedef struct {
     uint8_t baudrate_num;
 }page_uart_data_t;
 
+typedef struct {
+#define PAGE_STATE_ENTER_NETWORK_PAGE 0
+#define PAGE_STATE_CHECK_SCAN_RESULT 1
+
+    uint8_t state;
+    uint8_t selected_index;
+    uint8_t display_num;
+    uint8_t network_num;
+    
+    // 添加保存的网络记录
+    wifi_connection_record_t saved_networks[WIFI_STATION_MAX_RECORDS];
+    uint8_t saved_network_count;
+    
+    // 添加网络信号等级信息 
+    int8_t network_signal_levels[WIFI_STATION_MAX_RECORDS];  // 0表示无信号，1-4表示信号等级
+}page_network_data_t;
+
 
 // 消息框数据结构
 typedef struct {
@@ -119,6 +145,9 @@ typedef struct {
     TaskHandle_t task_handle;
     lcd_handle_t lcd_handle;
     
+    // 添加按键事件队列
+    QueueHandle_t button_queue;
+    
     struct {
         bool dirty;
         bool page_changed;
@@ -127,6 +156,7 @@ typedef struct {
         sys_tick_t page_expried_time;
         page_home_data_t home;
         page_uart_data_t uart;
+        page_network_data_t network;  // 添加网络页面数据
     } page;
 
     struct {
@@ -173,6 +203,9 @@ static void active_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id);
 // 更新主页动画
 static bool update_home_animation(display_context_t* ctx);
 
+// 处理按键事件（在显示任务中执行）
+static void handle_button_event(display_context_t* ctx, const display_button_event_t* button_event);
+
 // 显示任务函数
 static void display_task(void *arg);
 
@@ -217,135 +250,18 @@ static void button_event_handler(void* handler_args, esp_event_base_t base, int3
         return;
     }
     
-    // 根据事件类型进行不同处理
-    switch(id) {
-        case EXT_GPIO_EVENT_BUTTON_PRESSED:
-            ESP_LOGI(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
-            break; 
-            
-        case EXT_GPIO_EVENT_BUTTON_RELEASED:
-            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);         
-            break;
-            
-        case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
-            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);            
-            break;
-            
-        case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
-            ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
-
-            /*
-            主页:
-               单击显示菜单, 切换选项, 双击进入选择的子菜单, 超时关闭菜单 
-
-            帮助页:
-                任意按键退出, 超时(60秒)退出. 
-                不会唤起弹出菜单. 
-
-            串口页:
-                单击切换选项, 双击确认选项,并回到 home 
-                超时关闭菜单 
-                不会唤起弹出菜单. 
-
-            网络页:
-                单击切换选项, 双击确认选项,并回到 home 
-                超时关闭菜单 
-                不会唤起弹出菜单. 
-            */
-
-
-            if (data->data.button.click_count == 1) 
-            {
-                if (ctx->page.current_page == PAGE_HOME) 
-                {
-                    if (ctx->popup.current_popup == POPUP_MENU) {
-                        // 如果菜单已经显示, 则切换菜单 
-                        ctx->popup.menu.selected_index = (ctx->popup.menu.selected_index + 1) % _MENU_ENTRY_MAX;
-                        ctx->popup.dirty = true;
-                        ctx->popup.popup_expried_time = uptime() + 10000; // 10秒后自动关闭
-                    } else {
-                        // 显示菜单
-                        ctx->popup.current_popup = POPUP_MENU;
-                        ctx->popup.menu.selected_index = 0;
-                        ctx->popup.dirty = true;
-                        ctx->popup.popup_expried_time = uptime() + 10000;
-                    }                       
-                } 
-                else if (ctx->page.current_page == PAGE_UART)
-                {
-                    // 定义支持的波特率列表
-                    ctx->page.uart.selected_index = (ctx->page.uart.selected_index + 1) % ctx->page.uart.baudrate_num;
-                    ctx->page.dirty = true;
-                    // 延长页面显示时间
-                    ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
-                }
-                else // 其他子页,单击 可以延长时间, 超时返回主页
-                {
-                    ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
-                }
-            }
-            // 双击显示菜单, 或确认选项, 或关闭菜单 
-            else if (data->data.button.click_count == 2) 
-            {
-                if (ctx->page.current_page == PAGE_HOME) 
-                {
-                    if (ctx->popup.current_popup == POPUP_MENU) {    
-                        // 双击进入选择的子菜单 
-                        switch (ctx->popup.menu.selected_index) {
-                            case _MENU_ENTRY_UART:
-                                ESP_LOGI(TAG, "enter uart menu");
-                                switch_page(ctx, PAGE_UART);
-                                break;
-                            case _MENU_ENTRY_NETWORK:
-                                ESP_LOGI(TAG, "enter network menu");
-                                switch_page(ctx, PAGE_NETWORK);
-                                break;
-                            case _MENU_ENTRY_HELP:
-                                ESP_LOGI(TAG, "enter help menu");
-                                switch_page(ctx, PAGE_HELP);                                
-                                break;
-                            default:
-                                break;
-                        }
-                        
-                        ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
-                        ctx->popup.current_popup = POPUP_NONE;
-                        ctx->popup.dirty = true;
-                        
-                    } else {
-                        // 显示菜单
-                        ctx->popup.current_popup = POPUP_MENU;
-                        ctx->popup.menu.selected_index = 0;
-                        ctx->popup.dirty = true;
-                        ctx->popup.popup_expried_time = uptime() + 10000;
-                    }
-                } 
-                else if (ctx->page.current_page == PAGE_HELP) 
-                {
-                    switch_page(ctx, PAGE_HOME);
-                }
-                else if (ctx->page.current_page == PAGE_UART) 
-                {
-                    // 获取选中的波特率
-                    ctx->page.home.baudrate = s_supported_baudrates[ctx->page.uart.selected_index];
-                    // TODO: 保存到配置
-                    ESP_LOGI(TAG, "TODO: apply baudrate: %u", ctx->page.home.baudrate);
-                    // 返回主页
-                    switch_page(ctx, PAGE_HOME);
-                }
-                else if (ctx->page.current_page == PAGE_NETWORK) 
-                {
-                    switch_page(ctx, PAGE_HOME);
-                }
-            }
-            // 三击显示消息
-            // else if (data->data.button.click_count == 3) {
-            //     ctx->popup.current_popup = POPUP_MSG;
-            //     //snprintf(ctx->popup.msg.message, sizeof(ctx->popup.msg.message), "TODO");
-            //     ctx->popup.dirty = true;
-            //     ctx->popup.popup_expried_time = uptime() + 5000; // 5秒后自动关闭
-            // }
-            break;
+    // 创建内部事件并发送到队列
+    display_button_event_t button_event = {
+        .gpio_event = *data,
+        .event_id = id
+    };
+    
+    // 非阻塞发送到队列
+    if (ctx->button_queue != NULL) {
+        BaseType_t result = xQueueSend(ctx->button_queue, &button_event, 0);
+        if (result != pdTRUE) {
+            ESP_LOGW(TAG, "Button event queue full, dropping event");
+        }
     }
 }
 
@@ -366,10 +282,18 @@ esp_err_t display_init(void)
 
     ESP_LOGI(TAG, "Initializing display...");
     
+    // 创建按键事件队列
+    s_display_context.button_queue = xQueueCreate(DISPLAY_BUTTON_QUEUE_SIZE, sizeof(display_button_event_t));
+    if (s_display_context.button_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create button event queue");
+        return ESP_ERR_NO_MEM;
+    }
+    
     // 创建一个OLED显示器
     s_display_context.lcd_handle = lcd_display_create(LCD_DRIVER(i2c), LCD_MODEL(ssd1312), LCD_ROTATION_0, NULL, 0);
     if (s_display_context.lcd_handle == NULL) {
         ESP_LOGE(TAG, "Failed to create display");
+        vQueueDelete(s_display_context.button_queue);
         return ESP_ERR_NO_MEM;
     }
     
@@ -492,6 +416,12 @@ static void display_task(void *arg)
         sys_tick_t now = uptime();
         bool refresh = false;
 
+        // 处理按键事件队列
+        display_button_event_t button_event;
+        while (xQueueReceive(ctx->button_queue, &button_event, 0) == pdTRUE) {
+            handle_button_event(ctx, &button_event);
+        }
+
         // 刷新数据
         if (uptime_after(now, ctx->data_update_time)) {
             display_update_data(ctx);
@@ -522,15 +452,96 @@ static void display_task(void *arg)
             ESP_LOGI(TAG, "page changed from %d to %d", ctx->page.previous_page, ctx->page.current_page);
             ctx->page.page_changed = false;
 
+            // 进入网络页面时,触发网络相关逻辑启动 
             if (ctx->page.current_page == PAGE_NETWORK) {
-                // 执行相关任务,如果有的话 
-                if (ctx->popup.msg.msg_id == MSG_ID_NETWORK_ALREADY_CONNECTED) {
-                    active_popup_msg(ctx, MSG_ID_NETWORK_NOT_AVAILABLE);
-                } else if (ctx->popup.msg.msg_id == MSG_ID_NETWORK_NOT_AVAILABLE) {
-                    active_popup_msg(ctx, MSG_ID_START_CONNECTING_NETWORK);
-                } else if (ctx->popup.msg.msg_id == MSG_ID_START_CONNECTING_NETWORK) {
-                    active_popup_msg(ctx, MSG_ID_NETWORK_ALREADY_CONNECTED);
+                
+                // 初始化网络页面状态
+                ctx->page.network.state = PAGE_STATE_ENTER_NETWORK_PAGE;
+                ctx->page.network.selected_index = 0;
+                ctx->page.network.display_num = 4;  // 每页显示4个网络
+                
+                // 获取保存的网络记录
+                ctx->page.network.saved_network_count = WIFI_STATION_MAX_RECORDS;
+                esp_err_t ret = wifi_station_get_records(ctx->page.network.saved_networks, &ctx->page.network.saved_network_count);
+                
+                if (ret != ESP_OK || ctx->page.network.saved_network_count == 0) {
+                    // 没有保存的网络，显示消息并返回主页
+                    active_popup_msg(ctx, MSG_ID_NO_SAVED_NETWORK);
+                    switch_page(ctx, PAGE_HOME);
+                } else {
+                    // 获取当前WiFi状态
+                    wifi_connection_status_t wifi_status = {0};
+                    if (wifi_station_get_status(&wifi_status) == ESP_OK && 
+                        wifi_status.state == WIFI_STATE_CONNECTED) {
+                        // 如果已连接,查找是否是已保存的网络
+                        for (int i = 0; i < ctx->page.network.saved_network_count; i++) {
+                            if (strcmp(wifi_status.ssid, ctx->page.network.saved_networks[i].ssid) == 0) {
+                                // 找到匹配的网络,将选择器指向该网络
+                                ctx->page.network.selected_index = i;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // 有保存的网络，启动扫描
+                    ctx->page.network.network_num = ctx->page.network.saved_network_count;
+                    
+                    // 初始化信号等级为0
+                    for (int i = 0; i < WIFI_STATION_MAX_RECORDS; i++) {
+                        ctx->page.network.network_signal_levels[i] = 0;
+                    }
+                    
+                    // 显示扫描消息并启动异步扫描
+                    active_popup_msg(ctx, MSG_ID_START_SCANING_NETWORK);
+                    wifi_station_start_scan_async();
+                    ctx->page.network.state = PAGE_STATE_CHECK_SCAN_RESULT;
                 }
+            }
+        }
+
+        // 检查网络页面的扫描结果
+        if (ctx->page.current_page == PAGE_NETWORK && 
+            ctx->page.network.state == PAGE_STATE_CHECK_SCAN_RESULT) {
+            
+            if (wifi_station_is_scan_done()) {
+                // 扫描完成，获取扫描结果并更新信号等级
+                wifi_network_info_t scan_results[16];
+                uint16_t scan_count = 16;
+                
+                esp_err_t ret = wifi_station_get_scan_result(scan_results, &scan_count);
+                if (ret == ESP_OK) {
+                    // 更新保存网络的信号等级
+                    for (uint8_t i = 0; i < ctx->page.network.saved_network_count; i++) {
+                        ctx->page.network.network_signal_levels[i] = 0;  // 默认无信号
+                        
+                        // 在扫描结果中查找匹配的网络
+                        for (uint16_t j = 0; j < scan_count; j++) {
+                            if (strcmp(ctx->page.network.saved_networks[i].ssid, scan_results[j].ssid) == 0) {
+                                // 计算信号等级
+                                if (scan_results[j].rssi >= -55) {
+                                    ctx->page.network.network_signal_levels[i] = 4;
+                                } else if (scan_results[j].rssi >= -66) {
+                                    ctx->page.network.network_signal_levels[i] = 3;
+                                } else if (scan_results[j].rssi >= -77) {
+                                    ctx->page.network.network_signal_levels[i] = 2;
+                                } else {
+                                    ctx->page.network.network_signal_levels[i] = 1;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    
+                    ESP_LOGI(TAG, "Network scan completed, found %d APs, updated signal levels", scan_count);
+                } else {
+                    ESP_LOGW(TAG, "Failed to get scan results: %s", esp_err_to_name(ret));
+                }
+                
+                // 取消扫描消息，更新页面显示
+                ctx->popup.current_popup = POPUP_NONE;
+                ctx->popup.dirty = true;
+                ctx->page.dirty = true;
+                ctx->page.network.state = PAGE_STATE_ENTER_NETWORK_PAGE;  // 回到正常显示状态
             }
         }
 
@@ -997,21 +1008,76 @@ static void draw_uart_page(display_context_t* ctx)
 
 static void draw_network_page(display_context_t* ctx)
 {
+    page_network_data_t* network = &ctx->page.network;
+    
+    // 如果没有保存的网络，显示提示信息
+    if (network->saved_network_count == 0) {
+        lcd_display_string(ctx->lcd_handle, 0, 24, "No Networks", LCD_FONT(ascii_8x16), false);
+        return;
+    }
+    
     // 定义布局参数
-    const int left_width = 20;  // 左侧区域宽度
-    const int divider_width = 2;  // 分隔线宽度
-    // const int line_height = 16;  // 每行高度(8x16字体)
-    // const int right_start_x = left_width + divider_width + 10;  // 右侧内容起始x坐标(加10像素间距)
-    // const int right_icon_width = 16;
-    // const int start_y = 0;  // 从顶部开始显示
+    const int line_height = 16;        // 每行高度(8x16字体)
+    const int selector_width = 16;     // 选择符号区域宽度  
+    const int signal_icon_width = 16;  // 信号图标宽度
+    const int ssid_start_x = selector_width + signal_icon_width;  // SSID起始x坐标
+    const int start_y = 0;             // 从顶部开始显示
     
-    // 绘制左侧串口图标
-    const int icon_x = (left_width - 16) / 2;  // 16是图标宽度，水平居中
-    const int icon_y = (64 - 16) / 2;  // 垂直居中显示图标
-    lcd_display_mono_img(ctx->lcd_handle, icon_x, icon_y, LCD_IMG(network), false);
-    
-    // 绘制分隔线
-    lcd_draw_vertical_line(ctx->lcd_handle, left_width, 0, 64, divider_width, false);
+    // 计算显示的网络起始索引
+    int start_index = 0;
+    if (network->selected_index >= network->display_num) {
+        start_index = network->selected_index - network->display_num + 1;
+    }
+
+    // 显示网络列表
+    for (int i = 0; i < network->display_num; i++) 
+    {
+        int network_index = start_index + i;
+        if (network_index >= network->saved_network_count) {
+            break;  // 超出网络数量，停止显示
+        }
+
+        int y_pos = start_y + i * line_height;
+        wifi_connection_record_t *saved_network = &network->saved_networks[network_index];
+        int8_t signal_level = network->network_signal_levels[network_index];
+        
+        // 如果是当前选中的网络，显示'>'符号
+        if (network_index == network->selected_index) {
+            lcd_display_string(ctx->lcd_handle, 0, y_pos, ">", LCD_FONT(ascii_8x16), false);
+        }
+        
+        // 根据信号等级选择合适的图标
+        const lcd_mono_img_t* signal_img = NULL;
+        switch(signal_level) {
+            case 1:
+                signal_img = LCD_IMG(signal_1);
+                break;
+            case 2:
+                signal_img = LCD_IMG(signal_2);
+                break;
+            case 3:
+                signal_img = LCD_IMG(signal_3);
+                break;
+            case 4:
+                signal_img = LCD_IMG(signal_4);
+                break;
+            default:  // 0 或其他值
+                signal_img = LCD_IMG(no_signal_2);
+                break;                
+        }
+        
+        // 显示信号图标
+        if (signal_img) {
+            lcd_display_mono_img(ctx->lcd_handle, selector_width, y_pos, signal_img, false);
+        }
+        
+        // 显示SSID，截断过长的名称
+        char ssid_display[20];  // 限制显示长度
+        strncpy(ssid_display, saved_network->ssid, sizeof(ssid_display) - 1);
+        ssid_display[sizeof(ssid_display) - 1] = '\0';
+        
+        lcd_display_string(ctx->lcd_handle, ssid_start_x, y_pos, ssid_display, LCD_FONT(ascii_8x16), false);
+    }
 }
 
 static void draw_help_page(display_context_t* ctx)
@@ -1032,4 +1098,182 @@ static void active_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id)
     ctx->popup.current_popup = POPUP_MSG;
     ctx->popup.msg.msg_id = msg_id;
     ctx->popup.popup_expried_time = uptime() + 3000;
+}
+
+// 处理按键事件（在显示任务中执行）
+static void handle_button_event(display_context_t* ctx, const display_button_event_t* button_event)
+{
+    const ext_gpio_event_data_t* data = &button_event->gpio_event;
+    int32_t id = button_event->event_id;
+
+    // 根据事件类型进行不同处理
+    switch(id) {
+        case EXT_GPIO_EVENT_BUTTON_PRESSED:
+            ESP_LOGI(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
+            break; 
+            
+        case EXT_GPIO_EVENT_BUTTON_RELEASED:
+            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);         
+            break;
+            
+        case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
+            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);  
+            break;
+            
+        case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
+            ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
+
+            /*
+            主页:
+               单击显示菜单, 切换选项, 双击进入选择的子菜单, 超时关闭菜单 
+
+            帮助页:
+                任意按键退出, 超时(60秒)退出. 
+                不会唤起弹出菜单. 
+
+            串口页:
+                单击切换选项, 双击确认选项,并回到 home 
+                超时关闭菜单 
+                不会唤起弹出菜单. 
+
+            网络页:
+                单击切换选项, 双击确认选项,并回到 home 
+                超时关闭菜单 
+                不会唤起弹出菜单. 
+            */
+
+            if (data->data.button.click_count == 1) 
+            {
+                if (ctx->page.current_page == PAGE_HOME) 
+                {
+                    if (ctx->popup.current_popup == POPUP_MENU) {
+                        // 如果菜单已经显示, 则切换菜单 
+                        ctx->popup.menu.selected_index = (ctx->popup.menu.selected_index + 1) % _MENU_ENTRY_MAX;
+                        ctx->popup.dirty = true;
+                        ctx->popup.popup_expried_time = uptime() + 10000; // 10秒后自动关闭
+                    } else {
+                        // 显示菜单
+                        ctx->popup.current_popup = POPUP_MENU;
+                        ctx->popup.menu.selected_index = 0;
+                        ctx->popup.dirty = true;
+                        ctx->popup.popup_expried_time = uptime() + 10000;
+                    }                       
+                } 
+                else if (ctx->page.current_page == PAGE_UART)
+                {
+                    // 定义支持的波特率列表
+                    ctx->page.uart.selected_index = (ctx->page.uart.selected_index + 1) % ctx->page.uart.baudrate_num;
+                    ctx->page.dirty = true;
+                    // 延长页面显示时间
+                    ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                }
+                else if (ctx->page.current_page == PAGE_NETWORK) 
+                {
+                    // 单击切换选择的网络
+                    if (ctx->page.network.saved_network_count > 0) {
+                        ctx->page.network.selected_index = (ctx->page.network.selected_index + 1) % ctx->page.network.saved_network_count;
+                        ctx->page.dirty = true;
+                        // 延长页面显示时间
+                        ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                    }
+                }
+                else // 其他子页,单击 可以延长时间, 超时返回主页
+                {
+                    ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                }
+            }
+            // 双击显示菜单, 或确认选项, 或关闭菜单 
+            else if (data->data.button.click_count == 2) 
+            {
+                if (ctx->page.current_page == PAGE_HOME) 
+                {
+                    if (ctx->popup.current_popup == POPUP_MENU) {    
+
+                        // 双击进入选择的子菜单 
+                        switch (ctx->popup.menu.selected_index) {
+                            case _MENU_ENTRY_UART:
+                                ESP_LOGI(TAG, "enter uart menu");
+                                switch_page(ctx, PAGE_UART);
+                                break;
+                            case _MENU_ENTRY_NETWORK:
+                                ESP_LOGI(TAG, "enter network menu");
+                                switch_page(ctx, PAGE_NETWORK);
+                                break;
+                            case _MENU_ENTRY_HELP:
+                                ESP_LOGI(TAG, "enter help menu");
+                                switch_page(ctx, PAGE_HELP);                                
+                                break;
+                            default:
+                                break;
+                        }
+                        
+                        ctx->page.page_expried_time = uptime() + 60000; // 60秒后自动返回主页
+                        ctx->popup.current_popup = POPUP_NONE;
+                        ctx->popup.dirty = true;
+                        
+                    } else {
+                        // 显示菜单
+                        ctx->popup.current_popup = POPUP_MENU;
+                        ctx->popup.menu.selected_index = 0;
+                        ctx->popup.dirty = true;
+                        ctx->popup.popup_expried_time = uptime() + 10000;
+                    }
+                } 
+                else if (ctx->page.current_page == PAGE_HELP) 
+                {
+                    switch_page(ctx, PAGE_HOME);
+                }
+                else if (ctx->page.current_page == PAGE_UART) 
+                {
+                    // 获取选中的波特率
+                    ctx->page.home.baudrate = s_supported_baudrates[ctx->page.uart.selected_index];
+                    // TODO: 保存到配置
+                    ESP_LOGI(TAG, "TODO: apply baudrate: %u", ctx->page.home.baudrate);
+                    // 返回主页
+                    switch_page(ctx, PAGE_HOME);
+                }
+                else if (ctx->page.current_page == PAGE_NETWORK) 
+                {
+                    // 双击确认选择网络并尝试连接
+                    if (ctx->page.network.saved_network_count > 0 && 
+                        ctx->page.network.selected_index < ctx->page.network.saved_network_count) {
+                        
+                        uint8_t selected_idx = ctx->page.network.selected_index;
+                        wifi_connection_record_t *selected_network = &ctx->page.network.saved_networks[selected_idx];
+                        int8_t signal_level = ctx->page.network.network_signal_levels[selected_idx];
+                        
+                        // 获取当前WiFi状态
+                        wifi_connection_status_t wifi_status = {0};
+                        wifi_station_get_status(&wifi_status);
+                        
+                        if (signal_level == 0) {
+                            // 信号等级为0，网络不存在
+                            active_popup_msg(ctx, MSG_ID_NETWORK_NOT_AVAILABLE);
+                        } else if (wifi_status.state == WIFI_STATE_CONNECTED && 
+                                   strcmp(wifi_status.ssid, selected_network->ssid) == 0) {
+                            // 当前已连接到选中的网络
+                            active_popup_msg(ctx, MSG_ID_NETWORK_ALREADY_CONNECTED);
+                        } else {
+                            // 可用但非当前连接的网络，开始连接
+                            active_popup_msg(ctx, MSG_ID_START_CONNECTING_NETWORK);
+                            
+                            // 异步连接WiFi
+                            ESP_LOGI(TAG, "User selected network: %s, starting connection", selected_network->ssid);
+                            int retry = 2;
+                            while (retry > 0) {
+                                esp_err_t ret = wifi_station_connect(selected_network->ssid, selected_network->password);
+                                if (ret == ESP_OK) {
+                                    break;
+                                }
+                                retry--;
+                            }
+                        }
+                    }
+                    
+                    // 返回主页
+                    switch_page(ctx, PAGE_HOME);
+                }
+            }
+            break;
+    }
 }
