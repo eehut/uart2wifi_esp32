@@ -86,10 +86,10 @@ void lcd_fill(lcd_handle_t disp, uint8_t data);
  * @param y Y坐标
  * @param ch 要显示的字符
  * @param font 字体
- * @param refresh 是否立即刷新
+ * @param reverse 是否反向显示(黑底白字)
  * @return int 返回实际显示的像素宽度，如果完全不可见则返回0
  */
-int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh);
+int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool reverse);
 
 /**
  * @brief 显示一串文本，支持部分显示。如果字符超出显示区域，会显示能显示的部分
@@ -99,11 +99,11 @@ int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *
  * @param y 显示位置Y, 垂直方向, 从上到下
  * @param text 需要显示的文本
  * @param font 字体
- * @param refresh 是否刷新 
+ * @param reverse 是否反向显示(黑底白字)
  * 
  * @return int 返回显示的字符数量
  */
-int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool refresh);
+int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool reverse);
 
 /**
  * @brief 显示单色位图，支持部分显示
@@ -112,11 +112,24 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
  * @param x 显示位置X
  * @param y 显示位置Y
  * @param img 位图对象
- * @param refresh 是否刷新
+ * @param reverse 是否反向显示(黑底白字)
  * 
  * @return int 返回实际显示的像素宽度，如果完全不可见则返回0
  */
-int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *img, bool refresh);
+int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *img, bool reverse);
+
+/**
+ * @brief 清除指定区域的显示内容
+ * 
+ * @param disp LCD显示句柄
+ * @param x 起始x坐标
+ * @param y 起始y坐标
+ * @param width 要清除的宽度(像素)
+ * @param height 要清除的高度(像素)
+ * @param value 填充的值: 0 - 清空, 1 - 填充
+ * @return int 成功返回0，失败返回-1
+ */
+int lcd_fill_area(lcd_handle_t disp, int x, int y, int width, int height, uint8_t value);
 
 /**
  * @brief 清除指定区域的显示内容
@@ -128,7 +141,10 @@ int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *
  * @param height 要清除的高度(像素)
  * @return int 成功返回0，失败返回-1
  */
-int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height);
+static inline int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height)
+{
+    return lcd_fill_area(disp, x, y, width, height, 0);
+}
 
 
 /**
@@ -139,10 +155,10 @@ int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height);
  * @param y 
  * @param length 线的长度(垂直方向)
  * @param width 线宽(水平方向)
- * @param refresh 是否刷新
+ * @param reverse 是否反向显示(黑底白字)
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh);
+int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int width, bool reverse);
 
 /**
  * @brief 绘制水平线
@@ -152,10 +168,10 @@ int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int widt
  * @param y 
  * @param length 线的长度(水平方向)
  * @param width 线宽(垂直方向)
- * @param refresh 是否刷新
+ * @param reverse 是否反向显示(黑底白字)
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh);
+int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int width, bool reverse);
 
 /**
  * @brief 绘制矩形
@@ -166,10 +182,10 @@ int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int wi
  * @param end_x 结束x坐标
  * @param end_y 结束y坐标
  * @param width 线宽
- * @param refresh 是否刷新
+ * @param reverse 是否反向显示(黑底白字)
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool refresh);
+int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool reverse);
 
 /**
  * @brief 绘制矩形方法2
@@ -180,10 +196,10 @@ int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, i
  * @param x_len 矩形宽度
  * @param y_len 矩形高度
  * @param width 线宽(向内缩进)
- * @param refresh 是否立即刷新屏幕
+ * @param reverse 是否反向显示(黑底白字)
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, int y_len, int width, bool refresh);
+int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, int y_len, int width, bool reverse);
 
 #ifdef __cplusplus
 }

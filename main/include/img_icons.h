@@ -24,6 +24,13 @@ LCD_MONO_IMG_DECLARE(signal_4);
 LCD_MONO_IMG_DECLARE(no_signal_1);
 LCD_MONO_IMG_DECLARE(no_signal_2);
 
+LCD_MONO_IMG_DECLARE(signal_big_1);
+LCD_MONO_IMG_DECLARE(signal_big_2);
+LCD_MONO_IMG_DECLARE(signal_big_3);
+LCD_MONO_IMG_DECLARE(signal_big_4);
+
+LCD_MONO_IMG_DECLARE(no_signal_big);
+
 LCD_MONO_IMG_DECLARE(network);
 LCD_MONO_IMG_DECLARE(serial);
 LCD_MONO_IMG_DECLARE(help);

@@ -413,13 +413,14 @@ void lcd_fill(lcd_handle_t disp, uint8_t data)
 /**
  * @brief 显示指定的连续位，高字节开始有效
  * 
- * @param oled 
+ * @param disp 
  * @param x 
  * @param y 
  * @param value 
  * @param nbits 
+ * @param reverse 是否反向显示
  */
-static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8_t value, uint8_t nbits)
+static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8_t value, uint8_t nbits, bool reverse)
 {
     // 求出所在坐标点的字节位偏移量
     int offs = y * disp->xsize + x;
@@ -431,7 +432,14 @@ static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8
         // 位偏移为0，表示在第七位，位偏移为1，表示在第6位...
 
         // 总是从高位开始处理，高位放在左边
-        if (value & 0x80)
+        bool bit_value = (value & 0x80) != 0;
+        
+        // 如果是反向显示，则反转位值
+        if (reverse) {
+            bit_value = !bit_value;
+        }
+        
+        if (bit_value)
         {
             disp->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
         } 
@@ -452,10 +460,10 @@ static inline void _set_dram_bits(const lcd_display_t *disp, int x, int y, uint8
  * @param y 
  * @param ch 
  * @param font 
- * @param refresh 
+ * @param reverse 是否反向显示
  * @return int 返回实际显示的像素宽度
  */
-int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool refresh)
+int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *font, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;    
     int data_index = 0;
@@ -530,7 +538,7 @@ int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *
                     }
                     
                     _set_dram_bits(lcd, x + x_offset + display_start, y + h, 
-                                 adjusted_data << display_start, display_end - display_start);
+                                 adjusted_data << display_start, display_end - display_start, reverse);
                 }
             }
 
@@ -538,12 +546,6 @@ int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *
             //byte_index++;
             x_offset += 8;
         }
-    }
-
-    // 刷新
-    if (refresh)
-    {
-        lcd_refresh(disp);
     }
 
     return displayed_width;
@@ -558,11 +560,11 @@ int lcd_display_char(lcd_handle_t disp, int x, int y, int ch, const lcd_font_t *
  * @param y 显示位置Y, 垂直方向, 从上到下
  * @param text 需要显示的文本
  * @param font 字体
- * @param refresh 是否刷新 
+ * @param reverse 是否反向显示
  * 
  * @return int 返回显示的字符数量
  */
-int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool refresh)
+int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const lcd_font_t *font, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;       
     const char *ch = text;     
@@ -583,7 +585,7 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
     // 显示每个字符，即使只能部分显示
     while (*ch)
     {
-        int width = lcd_display_char(disp, current_x, y, *ch, font, false);
+        int width = lcd_display_char(disp, current_x, y, *ch, font, reverse);
         if (width > 0)
         {
             count++;
@@ -596,11 +598,6 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
         ch++;
     }
 
-    if (refresh)
-    {
-        lcd_refresh(disp);
-    }
-
     return count;
 }
 
@@ -611,11 +608,11 @@ int lcd_display_string(lcd_handle_t disp, int x, int y, const char *text, const 
  * @param x 显示位置X
  * @param y 显示位置Y
  * @param img 位图对象
- * @param refresh 是否刷新
+ * @param reverse 是否反向显示
  * 
  * @return int 返回实际显示的像素宽度，如果完全不可见则返回0
  */
-int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *img, bool refresh)
+int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *img, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;    
     int displayed_width = 0;
@@ -685,16 +682,11 @@ int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *
                     }
                     
                     _set_dram_bits(lcd, x + x_offset + display_start, y + h, 
-                                 adjusted_data << display_start, display_end - display_start);
+                                 adjusted_data << display_start, display_end - display_start, reverse);
                 }
             }
             x_offset += 8;
         }
-    }
-
-    if (refresh)
-    {
-        lcd_refresh(disp);
     }
     
     return displayed_width;
@@ -708,10 +700,10 @@ int lcd_display_mono_img(lcd_handle_t disp, int x, int y, const lcd_mono_img_t *
  * @param y 起始y坐标
  * @param length 线的长度(垂直方向)
  * @param width 线宽(水平方向)
- * @param refresh 是否立即刷新屏幕
+ * @param reverse 是否反向显示
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh)
+int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int width, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;
     
@@ -744,13 +736,13 @@ int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int widt
         for (int i = 0; i < actual_width; i++) {
             // 计算内存中的位偏移
             int offs = (curr_y * lcd->xsize + (start_x + i));
-            // 设置对应位为1
-            lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+            // 根据reverse参数设置或清除位
+            if (reverse) {
+                lcd->dram[offs >> 3] &= ~(1 << (7 - (offs & 0x07)));
+            } else {
+                lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+            }
         }
-    }
-    
-    if (refresh) {
-        lcd_refresh(disp);
     }
     
     return 0;
@@ -764,10 +756,10 @@ int lcd_draw_vertical_line(lcd_handle_t disp, int x, int y, int length, int widt
  * @param y 起始y坐标
  * @param length 线的长度(水平方向)
  * @param width 线宽(垂直方向)
- * @param refresh 是否立即刷新屏幕
+ * @param reverse 是否反向显示
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int width, bool refresh)
+int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int width, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;
     
@@ -800,13 +792,13 @@ int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int wi
         for (int curr_x = start_x; curr_x < end_x; curr_x++) {
             // 计算内存中的位偏移
             int offs = (curr_y * lcd->xsize + curr_x);
-            // 设置对应位为1
-            lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+            // 根据reverse参数设置或清除位
+            if (reverse) {
+                lcd->dram[offs >> 3] &= ~(1 << (7 - (offs & 0x07)));
+            } else {
+                lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+            }
         }
-    }
-    
-    if (refresh) {
-        lcd_refresh(disp);
     }
     
     return 0;
@@ -821,10 +813,10 @@ int lcd_draw_horizontal_line(lcd_handle_t disp, int x, int y, int length, int wi
  * @param end_x 右下角x坐标
  * @param end_y 右下角y坐标
  * @param width 边框宽度
- * @param refresh 是否立即刷新屏幕
+ * @param reverse 是否反向显示
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool refresh)
+int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, int end_y, int width, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;
     
@@ -862,23 +854,23 @@ int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, i
         for (int y = start_y; y <= end_y; y++) {
             for (int x = start_x; x <= end_x; x++) {
                 int offs = (y * lcd->xsize + x);
-                lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+                if (reverse) {
+                    lcd->dram[offs >> 3] &= ~(1 << (7 - (offs & 0x07)));
+                } else {
+                    lcd->dram[offs >> 3] |= (1 << (7 - (offs & 0x07)));
+                }
             }
         }
     } else {
         // 绘制四条边
         // 上边
-        lcd_draw_horizontal_line(disp, start_x, start_y, rect_width, width, false);
+        lcd_draw_horizontal_line(disp, start_x, start_y, rect_width, width, reverse);
         // 下边
-        lcd_draw_horizontal_line(disp, start_x, end_y - width + 1, rect_width, width, false);
+        lcd_draw_horizontal_line(disp, start_x, end_y - width + 1, rect_width, width, reverse);
         // 左边
-        lcd_draw_vertical_line(disp, start_x, start_y, rect_height, width, false);
+        lcd_draw_vertical_line(disp, start_x, start_y, rect_height, width, reverse);
         // 右边
-        lcd_draw_vertical_line(disp, end_x - width + 1, start_y, rect_height, width, false);
-    }
-    
-    if (refresh) {
-        lcd_refresh(disp);
+        lcd_draw_vertical_line(disp, end_x - width + 1, start_y, rect_height, width, reverse);
     }
     
     return 0;
@@ -893,10 +885,10 @@ int lcd_draw_rectangle(lcd_handle_t disp, int start_x, int start_y, int end_x, i
  * @param x_len 矩形宽度
  * @param y_len 矩形高度
  * @param width 线宽(向内缩进)
- * @param refresh 是否立即刷新屏幕
+ * @param reverse 是否反向显示
  * @return int 成功返回0，失败返回-1
  */
-int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, int y_len, int width, bool refresh)
+int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, int y_len, int width, bool reverse)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;
 
@@ -928,7 +920,7 @@ int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, 
             start_y + i,          // 起始y
             x_len - 2 * i,        // 长度
             1,                    // 线宽
-            false                 // 不立即刷新
+            reverse               // 反向显示
         );
 
         // 绘制下边
@@ -937,7 +929,7 @@ int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, 
             start_y + y_len - i - 1, // 起始y
             x_len - 2 * i,        // 长度
             1,                    // 线宽
-            false                 // 不立即刷新
+            reverse               // 反向显示
         );
 
         // 绘制左边
@@ -946,7 +938,7 @@ int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, 
             start_y + i,          // 起始y
             y_len - 2 * i,        // 长度
             1,                    // 线宽
-            false                 // 不立即刷新
+            reverse               // 反向显示
         );
 
         // 绘制右边
@@ -955,17 +947,13 @@ int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, 
             start_y + i,          // 起始y
             y_len - 2 * i,        // 长度
             1,                    // 线宽
-            false                 // 不立即刷新
+            reverse               // 反向显示
         );
-    }
-
-    // 如果需要立即刷新
-    if (refresh) {
-        lcd_refresh(disp);
     }
 
     return 0;
 }
+
 
 /**
  * @brief 清除指定区域的显示内容
@@ -975,9 +963,10 @@ int lcd_draw_rectangle1(lcd_handle_t disp, int start_x, int start_y, int x_len, 
  * @param y 起始y坐标
  * @param width 要清除的宽度(像素)
  * @param height 要清除的高度(像素)
+ * @param value 填充的值: 0 - 清空, 1 - 填充
  * @return int 成功返回0，失败返回-1
  */
-int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height)
+int lcd_fill_area(lcd_handle_t disp, int x, int y, int width, int height, uint8_t value)
 {
     lcd_display_t *lcd = (lcd_display_t *)disp;    
     
@@ -1009,7 +998,7 @@ int lcd_clear_area(lcd_handle_t disp, int x, int y, int width, int height)
             // 每次处理8位
             int fbits = (left_bits > 8) ? 8 : left_bits;
             // 使用0来清除显示
-            _set_dram_bits(lcd, x + byte_index * 8, y + h, 0x00, fbits);
+            _set_dram_bits(lcd, x + byte_index * 8, y + h, value ? 0xff : 0x00, fbits, false);
             left_bits -= fbits;
             byte_index++;
         }

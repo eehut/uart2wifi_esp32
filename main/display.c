@@ -1082,8 +1082,11 @@ static void draw_network_page(display_context_t* ctx)
 
 static void draw_help_page(display_context_t* ctx)
 {
+    // 显示一个黑色块 
+    lcd_fill_area(ctx->lcd_handle, 10, 10, 128-10, 40, 1);
+
     // 绘制帮助页面
-    lcd_display_mono_img(ctx->lcd_handle, 32, 0, LCD_IMG(qrcode), false);
+    //lcd_display_mono_img(ctx->lcd_handle, 32, 0, LCD_IMG(qrcode), false);
 }
 
 
