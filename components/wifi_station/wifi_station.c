@@ -74,6 +74,10 @@ typedef struct {
     uint8_t retry_count;             // 当前网络的重试次数
     uint8_t consecutive_failures;    // 当前网络的连续失败次数
     bool use_short_interval;         // 是否使用短间隔（10秒）
+    
+    // 新增回调相关字段
+    wifi_station_event_callback_t event_callback;  // 事件回调函数
+    void *user_ctx;                  // 用户上下文
 } wifi_station_ctx_t;
 
 static wifi_station_ctx_t s_wifi_ctx = {0};
@@ -89,7 +93,7 @@ static int find_best_network(wifi_ap_record_t *ap_list, uint16_t ap_count);
 static void add_or_update_record_internal(const char *ssid, const char *password, bool ever_success);
 static esp_err_t start_scan_internal(bool is_background_scan);
 
-esp_err_t wifi_station_init(void)
+esp_err_t wifi_station_init(wifi_station_event_callback_t event_callback, void *user_ctx)
 {
     if (s_wifi_ctx.initialized) {
         ESP_LOGW(TAG, "WiFi station already initialized");
@@ -112,6 +116,10 @@ esp_err_t wifi_station_init(void)
     s_wifi_ctx.retry_count = 0;
     s_wifi_ctx.consecutive_failures = 0;
     s_wifi_ctx.use_short_interval = true;  // 默认使用短间隔
+
+    // 设置回调函数
+    s_wifi_ctx.event_callback = event_callback;
+    s_wifi_ctx.user_ctx = user_ctx;
 
     // 创建互斥锁
     s_wifi_ctx.mutex = xSemaphoreCreateMutex();
@@ -574,6 +582,15 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
         s_wifi_ctx.state = WIFI_STATE_DISCONNECTED;
         s_wifi_ctx.connected_time = 0;
+        
+        // 调用断开连接回调
+        if (s_wifi_ctx.event_callback) {
+            wifi_connection_status_t status = {0};
+            status.state = s_wifi_ctx.state;
+            strncpy(status.ssid, s_wifi_ctx.current_ssid, sizeof(status.ssid) - 1);
+            s_wifi_ctx.event_callback(WIFI_EVENT_DISCONNECTED, &status, s_wifi_ctx.user_ctx);
+        }
+        
         xSemaphoreGive(s_wifi_ctx.mutex);
         
         xEventGroupSetBits(s_wifi_ctx.wifi_event_group, WIFI_FAIL_BIT);
@@ -614,12 +631,38 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             }
         }
         
+        // 调用连接成功回调
+        if (s_wifi_ctx.event_callback) {
+            wifi_connection_status_t status = {0};
+            status.state = s_wifi_ctx.state;
+            strncpy(status.ssid, s_wifi_ctx.current_ssid, sizeof(status.ssid) - 1);
+            memcpy(status.bssid, s_wifi_ctx.current_bssid, sizeof(status.bssid));
+            status.rssi = s_wifi_ctx.current_rssi;
+            s_wifi_ctx.event_callback(WIFI_EVENT_CONNECTED, &status, s_wifi_ctx.user_ctx);
+        }
+        
         xSemaphoreGive(s_wifi_ctx.mutex);
         
         xEventGroupSetBits(s_wifi_ctx.wifi_event_group, WIFI_CONNECTED_BIT);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
+        
+        // 调用获取IP回调
+        if (s_wifi_ctx.event_callback) {
+            wifi_connection_status_t status = {0};
+            xSemaphoreTake(s_wifi_ctx.mutex, portMAX_DELAY);
+            status.state = s_wifi_ctx.state;
+            strncpy(status.ssid, s_wifi_ctx.current_ssid, sizeof(status.ssid) - 1);
+            memcpy(status.bssid, s_wifi_ctx.current_bssid, sizeof(status.bssid));
+            status.rssi = s_wifi_ctx.current_rssi;
+            status.ip_addr = event->ip_info.ip.addr;
+            status.netmask = event->ip_info.netmask.addr;
+            status.gateway = event->ip_info.gw.addr;
+            xSemaphoreGive(s_wifi_ctx.mutex);
+            
+            s_wifi_ctx.event_callback(WIFI_EVENT_GOT_IP, &status, s_wifi_ctx.user_ctx);
+        }
     }
 }
 

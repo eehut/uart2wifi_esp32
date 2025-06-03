@@ -14,7 +14,7 @@ void test_wifi_station_compilation(void)
     uint8_t record_count;
     
     // 测试所有API函数是否能正确编译
-    (void)wifi_station_init();
+    (void)wifi_station_init(NULL, NULL);
     (void)wifi_station_get_status(&status);
     (void)wifi_station_scan_networks(networks, &count);
     (void)wifi_station_connect("test", "test");

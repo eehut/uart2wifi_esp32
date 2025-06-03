@@ -11,11 +11,18 @@
 static const char *TAG = "bus-manager";
 
 // I2C总线句柄数组
-static i2c_master_bus_handle_t s_i2c_bus_handles[BUS_I2C_MAX] = {NULL};
+static i2c_master_bus_handle_t s_i2c_bus_handles[CONFIG_BUS_MANAGER_I2C_BUS_MAX_NUM] = {NULL};
+// UART硬件配置数组
+typedef struct {
+    bool is_used;
+    uint8_t user_id;
+    uart_hw_config_t hw_config;
+}uart_hw_config_item_t;
+static uart_hw_config_item_t s_uart_hw_configs[CONFIG_BUS_MANAGER_UART_MAX_NUM] = {0};
 
 esp_err_t i2c_bus_init(i2c_bus_t bus_id, const i2c_bus_config_t *config)
 {
-    if (bus_id >= BUS_I2C_MAX || config == NULL) {
+    if (bus_id >= CONFIG_BUS_MANAGER_I2C_BUS_MAX_NUM || config == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -48,7 +55,7 @@ esp_err_t i2c_bus_init(i2c_bus_t bus_id, const i2c_bus_config_t *config)
 
 i2c_master_bus_handle_t i2c_bus_get_handle(i2c_bus_t bus_id)
 {
-    if (bus_id >= BUS_I2C_MAX) {
+    if (bus_id >= CONFIG_BUS_MANAGER_I2C_BUS_MAX_NUM) {
         return NULL;
     }
 
@@ -62,7 +69,7 @@ i2c_master_bus_handle_t i2c_bus_get_handle(i2c_bus_t bus_id)
 
 esp_err_t i2c_bus_deinit(i2c_bus_t bus_id)
 {
-    if (bus_id >= BUS_I2C_MAX) {
+    if (bus_id >= CONFIG_BUS_MANAGER_I2C_BUS_MAX_NUM) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -82,3 +89,34 @@ esp_err_t i2c_bus_deinit(i2c_bus_t bus_id)
     return ESP_OK;
 } 
 
+
+esp_err_t uart_hw_config_add(uint8_t user_id, const uart_hw_config_t *config)
+{
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    for (int i = 0; i < CONFIG_BUS_MANAGER_UART_MAX_NUM; i++) {
+        if (!s_uart_hw_configs[i].is_used) {
+            s_uart_hw_configs[i].is_used = true;
+            s_uart_hw_configs[i].user_id = user_id;
+            s_uart_hw_configs[i].hw_config = *config;
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NO_MEM;
+}
+
+const uart_hw_config_t *uart_hw_config_get(uint8_t user_id)
+{
+    if (user_id >= CONFIG_BUS_MANAGER_UART_MAX_NUM) {
+        return NULL;
+    }
+
+    for (int i = 0; i < CONFIG_BUS_MANAGER_UART_MAX_NUM; i++) {
+        if (s_uart_hw_configs[i].is_used && s_uart_hw_configs[i].user_id == user_id) {
+            return &s_uart_hw_configs[i].hw_config;
+        }
+    }
+    return NULL;
+}

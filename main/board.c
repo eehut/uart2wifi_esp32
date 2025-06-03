@@ -40,6 +40,12 @@ static const i2c_bus_config_t s_i2c_bus_config = {
 };
 
 
+static const uart_hw_config_t s_uart_hw_config = {
+    .uart_port = 1,
+    .rxd_pin = GPIO_NUM_1,
+    .txd_pin = GPIO_NUM_0,
+};
+
 /**
  * @brief 板级初始化
  * 
@@ -47,20 +53,16 @@ static const i2c_bus_config_t s_i2c_bus_config = {
  */
 int board_init(void)
 {
-    int ret = 0;
 
-    ret = ext_gpio_config(s_gpio_configs, sizeof(s_gpio_configs) / sizeof(s_gpio_configs[0]));
-    if (ret != 0) {
-        ESP_LOGE(TAG, "init gpio failed!, ret: %d", ret);   
-        return ret;
-    }
+    ESP_ERROR_CHECK(ext_gpio_config(s_gpio_configs, sizeof(s_gpio_configs) / sizeof(s_gpio_configs[0])));
 
-    ret = i2c_bus_init(BUS_I2C0, &s_i2c_bus_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "init i2c bus failed!, ret: %d", ret);
-        return ret;
-    }
+    ESP_ERROR_CHECK(i2c_bus_init(BUS_I2C0, &s_i2c_bus_config));
+
+    ESP_ERROR_CHECK(uart_hw_config_add(UART_PRIMARY, &s_uart_hw_config));
+
+    ESP_LOGI(TAG, "Board initialized success");
 
     return 0;
 }
+
 

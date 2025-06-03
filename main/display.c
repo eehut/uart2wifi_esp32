@@ -10,6 +10,7 @@
 #include "esp_err.h"
 #include "lcd_driver.h"
 #include "lcd_display.h"
+#include "uart_bridge.h"
 #include "lcd_models.h"
 #include "lcd_fonts.h"
 #include "img_icons.h"
@@ -665,6 +666,31 @@ static void display_update_data(display_context_t* ctx)
         }
     }
 
+    // 更新UART状态
+    uart_bridge_status_t uart_status = {0};
+    if (uart_bridge_get_status(&uart_status) == ESP_OK) {
+
+        if ((home->client_num != uart_status.tcp_client_num)
+            || (home->ip_port != uart_status.tcp_port)
+            || (home->baudrate != uart_status.baudrate)) {
+            home->client_num = uart_status.tcp_client_num;
+            home->ip_port = uart_status.tcp_port;
+            home->baudrate = uart_status.baudrate;
+            need_refresh = true;
+        }        
+    }
+
+    // 更新RX/TX字节数
+    uart_bridge_stats_t stats = {0};
+    if (uart_bridge_get_stats(&stats) == ESP_OK) {
+        if ((home->rx_bytes != stats.uart_rx_bytes)
+            || (home->tx_bytes != stats.uart_tx_bytes)) {
+            home->rx_bytes = stats.uart_rx_bytes;
+            home->tx_bytes = stats.uart_tx_bytes;
+            need_refresh = true;
+        }
+    }
+
     // 如果有数据更新，设置页面需要刷新
     if (need_refresh) {
         ctx->page.dirty = true;
@@ -746,9 +772,9 @@ static void draw_home_page(display_context_t* ctx)
     // 显示状态信息, 如果是离线,显示OFFLINE, 如果是已连接,显示IP地址.
 
     if (home->wifi_state == WIFI_STATE_CONNECTED) {
-        // 右对齐显示, 需要根据长度计算X坐标
+        // 水平居中显示, 需要根据长度计算X坐标
         int text_width = strlen(home->ip_address) * 8; // ascii_8x16字体宽度为8
-        int x = 128 - text_width;
+        int x = (128 - text_width) / 2;
         lcd_display_string(ctx->lcd_handle, x, LINE2_TEXT_Y, home->ip_address, LCD_FONT(ascii_8x8), false);
     } else if (home->wifi_state == WIFI_STATE_CONNECTING) {
         lcd_display_string(ctx->lcd_handle, 0, LINE2_TEXT_Y, "CONNECTING...", LCD_FONT(ascii_8x8), false);

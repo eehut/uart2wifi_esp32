@@ -24,7 +24,7 @@ void wifi_station_example(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // 初始化WiFi Station组件
-    ESP_ERROR_CHECK(wifi_station_init());
+    ESP_ERROR_CHECK(wifi_station_init(NULL, NULL));
 
     // 等待一段时间让后台任务工作
     vTaskDelay(pdMS_TO_TICKS(5000));

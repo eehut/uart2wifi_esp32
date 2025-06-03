@@ -19,6 +19,10 @@ enum GPIO_IDS {
     GPIO_BUTTON,
 };
 
+enum UART_IDS {
+    UART_PRIMARY = 0,
+};
+
 
 
 #ifdef __cplusplus

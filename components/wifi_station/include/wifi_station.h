@@ -75,12 +75,34 @@ typedef struct {
 } wifi_connection_status_t;
 
 /**
+ * @brief WiFi事件类型枚举
+ */
+typedef enum {
+    WIFI_EVENT_CONNECTED,       ///< WiFi连接成功
+    WIFI_EVENT_DISCONNECTED,    ///< WiFi连接断开
+    WIFI_EVENT_GOT_IP          ///< 获取到IP地址
+} wifi_station_event_t;
+
+/**
+ * @brief WiFi事件回调函数类型
+ * 
+ * @param event WiFi事件类型
+ * @param status WiFi连接状态信息
+ * @param user_ctx 用户上下文
+ */
+typedef void (*wifi_station_event_callback_t)(wifi_station_event_t event, 
+                                              const wifi_connection_status_t *status, 
+                                              void *user_ctx);
+
+/**
  * @brief 初始化WiFi Station组件
  * 
+ * @param event_callback WiFi事件回调函数（可选，可为NULL）
+ * @param user_ctx 用户上下文，将传递给回调函数
  * @return ESP_OK 成功
  *         其他错误码 失败
  */
-esp_err_t wifi_station_init(void);
+esp_err_t wifi_station_init(wifi_station_event_callback_t event_callback, void *user_ctx);
 
 /**
  * @brief 反初始化WiFi Station组件

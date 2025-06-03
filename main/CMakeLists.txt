@@ -1,7 +1,6 @@
-
-idf_component_register(SRCS "board.c" "cli_impl.c" "cli_menu.c" "display.c" "img_icons.c" "app_main.c"
+idf_component_register(SRCS "uart_bridge.c" "board.c" "cli_impl.c" "cli_menu.c" "display.c" "img_icons.c" "app_main.c" 
                     INCLUDE_DIRS "include"
-                    REQUIRES driver esp_common nvs_flash uptime ext_gpio app_event_loop bus_manager lcd_font lcd_display wifi_station)
+                    REQUIRES driver esp_common nvs_flash uptime ext_gpio app_event_loop bus_manager lcd_font lcd_display wifi_station tcp_server misc_utils)
 
 
 # 为ext_gpio组件设置编译宏
