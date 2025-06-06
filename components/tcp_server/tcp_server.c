@@ -38,7 +38,8 @@ struct tcp_server_s {
     // 任务配置
     uint32_t stack_size;
     uint32_t task_priority;
-    bool verbose;
+    bool tx_verbose;
+    bool rx_verbose;
 };
 
 /**
@@ -91,7 +92,7 @@ static void remove_client(tcp_server_handle_t server, tcp_client_t *client) {
         return;
     }
     
-    ESP_LOGI(TAG, "Client(%s:%d) disconnected", 
+    ESP_LOGI(TAG, "client(%s:%d) disconnected", 
              ipaddr_ntoa(&client->ip_addr), client->port);
     
     // 调用断开连接回调
@@ -160,7 +161,7 @@ static esp_err_t handle_new_connection(tcp_server_handle_t server) {
     
     server->client_count++;
     
-    ESP_LOGI(TAG, "New Client(%s:%d) connected (slot: %d, total: %d)", 
+    ESP_LOGI(TAG, "New client(%s:%d) connected (slot: %d, total: %d)", 
              ipaddr_ntoa(&client->ip_addr), client->port, slot, server->client_count);
     
     // 调用连接回调
@@ -180,9 +181,9 @@ static esp_err_t handle_client_data(tcp_server_handle_t server, tcp_client_t *cl
     int bytes_received = recv(client->socket_fd, buffer, sizeof(buffer), 0);
     if (bytes_received > 0) {
         
-        if (server->verbose) {
+        if (server->rx_verbose) {
             char client_info[64];
-            sprintf(client_info, "Rx from Client(%s:%d)[len=%d]:", ipaddr_ntoa(&client->ip_addr), client->port, bytes_received);
+            sprintf(client_info, "rx from client(%s:%d)[len=%d]:", ipaddr_ntoa(&client->ip_addr), client->port, bytes_received);
             hex_dump(buffer, bytes_received, client_info);
         }
 
@@ -338,7 +339,8 @@ tcp_server_handle_t tcp_server_create(const tcp_server_config_t *config, esp_err
     server->user_ctx = config->user_ctx;
     server->stack_size = config->stack_size > 0 ? config->stack_size : 4096;
     server->task_priority = config->task_priority > 0 ? config->task_priority : 5;
-    server->verbose = config->verbose;
+    server->tx_verbose = config->verbose;
+    server->rx_verbose = config->verbose;
     server->listen_socket = -1;
     server->client_count = 0;
     server->running = false;
@@ -506,9 +508,9 @@ esp_err_t tcp_server_send_to_client(tcp_server_handle_t server_handle, tcp_clien
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (server_handle->verbose) {
+    if (server_handle->tx_verbose) {
         char client_info[64];
-        sprintf(client_info, "Tx to Client(%s:%d)[len=%d]:", ipaddr_ntoa(&client->ip_addr), client->port, len);
+        sprintf(client_info, "tx to client(%s:%d)[len=%d]:", ipaddr_ntoa(&client->ip_addr), client->port, len);
         hex_dump(data, len, client_info);
     }
     
@@ -575,3 +577,13 @@ esp_err_t tcp_server_disconnect_client(tcp_server_handle_t server_handle, tcp_cl
     
     return ESP_OK;
 } 
+
+void tcp_server_set_verbose(tcp_server_handle_t server_handle, bool tx_verbose, bool rx_verbose) {
+    if (server_handle == NULL) {
+        return;
+    }
+    
+    tcp_server_handle_t server = server_handle;
+    server->tx_verbose = tx_verbose;
+    server->rx_verbose = rx_verbose;
+}

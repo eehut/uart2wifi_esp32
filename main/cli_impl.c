@@ -10,6 +10,7 @@
  */
 
 #include "wifi_station.h"
+#include "uart_bridge.h"
 #include "esp_types.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -32,6 +33,7 @@ typedef enum {
     CLI_STATE_STATUS,
     CLI_STATE_WIFI,
     CLI_STATE_UART,
+    CLI_STATE_DEBUG,
     CLI_STATE_ABOUT,
 } cli_state_t;
 
@@ -104,24 +106,13 @@ static void handle_wifi_disconnect(const char *input);
 static void handle_wifi_networks(const char *input);
 static void handle_wifi_network_delete(const char *input);
 static void handle_wifi_network_add(const char *input);
+static void handle_statistics_debug_menu(const char *input);
 
 static void return_to_main_menu(const char *input);
 
 static void activity_timer_callback(TimerHandle_t xTimer);
 static void set_cli_active(bool active);
 
-// 模拟串口波特率设置
-static uint32_t s_current_baudrate = 115200;
-
-uint32_t get_current_baudrate(void)
-{
-    return s_current_baudrate;
-}
-
-void set_uart_baudrate(uint32_t baudrate)
-{
-    s_current_baudrate = baudrate;
-}
 
 void cli_state_machine_init(void)
 {
@@ -197,6 +188,9 @@ void cli_state_machine_input(const char *input)
         case CLI_STATE_UART:
             handle_set_uart_baudrate(input);
             break;
+        case CLI_STATE_DEBUG:
+            handle_statistics_debug_menu(input);
+            break;
         case CLI_STATE_ABOUT:
             return_to_main_menu(input);
             break;
@@ -240,8 +234,9 @@ static void show_main_menu(void)
     printf("\n=== Main Menu ===\n");
     printf("1. Status\n");
     printf("2. WiFi Setting\n");
-    printf("3. UART Setting\n");
-    printf("4. About\n");
+    printf("3. UART Baudrate\n");
+    printf("4. Statistics & Debug\n");
+    printf("5. About\n");
     printf("Please input: ");
     fflush(stdout);
 }
@@ -270,6 +265,13 @@ static void show_status(void)
 
     if (ret != ESP_OK) {
         printf("***Failed to get WiFi status: %s\n", esp_err_to_name(ret));
+        return;
+    }
+
+    uart_bridge_status_t bridge_status;
+    ret = uart_bridge_get_status(&bridge_status);
+    if (ret != ESP_OK) {
+        printf("***Failed to get uart-bridge status: %s\n", esp_err_to_name(ret));
         return;
     }
 
@@ -322,8 +324,11 @@ static void show_status(void)
             (int)((wifi_status.dns1 >> 8) & 0xFF),
             (int)((wifi_status.dns1 >> 16) & 0xFF),
             (int)((wifi_status.dns1 >> 24) & 0xFF));    
-    printf("UART Settings\n");
-    printf(" Baudrate : %" PRIu32 "\n", get_current_baudrate());
+    printf("UART Bridge\n");
+    printf(" Port     : %" PRIu16 "\n", bridge_status.tcp_port);
+    printf(" Baudrate : %" PRIu32 "\n", bridge_status.uart_baudrate);
+    printf(" Clients  : %" PRIu16 "\n", bridge_status.tcp_client_num);
+    printf(" Service  : %s\n", bridge_status.forwarding ? "forwarding" : "standby");
     printf("--------\n");
     printf("Input [Enter] to return\n");
     fflush(stdout);
@@ -331,12 +336,13 @@ static void show_status(void)
 
 static void show_uart_baudrate_menu(void)
 {
-    printf("\n=== UART Baudrate Setting ===\n");
+    printf("\n=== UART Baudrate ===\n");
 
-    uint32_t current = get_current_baudrate();
+    uart_bridge_status_t bridge_status = {0};
+    uart_bridge_get_status(&bridge_status);
 
     for (int i = 0; i < sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0]); i++) {
-        printf("%d. %" PRIu32 " %s\n", i + 1, s_supported_baudrates[i], current == s_supported_baudrates[i] ? "<" : "");
+        printf("%d. %" PRIu32 " %s\n", i + 1, s_supported_baudrates[i], bridge_status.uart_baudrate == s_supported_baudrates[i] ? "<" : "");
     }
 
     printf("--------\n");
@@ -345,6 +351,25 @@ static void show_uart_baudrate_menu(void)
     printf("Please input: ");
     fflush(stdout);
 }
+
+static void show_statistics_debug_menu(void)
+{
+    printf("\n=== Statistics & Debug ===\n");
+    printf("1. Show Statistics\n");
+    printf("2. Reset Statistics\n");
+    printf("3. Uart TX Verbose\n");
+    printf("4. Uart RX Verbose\n");
+    printf("5. Uart TX & RX Verbose\n");
+    printf("6. TCP TX Verbose\n");
+    printf("7. TCP RX Verbose\n");
+    printf("8. TCP TX & RX Verbose\n");
+    printf("--------\n");
+    printf("0. Exit\n");
+    printf("--------\n");
+    printf("Please input: ");
+    fflush(stdout);
+}
+
 
 static void show_about_menu(void)
 {
@@ -547,6 +572,10 @@ static void handle_main_menu(const char *input)
             show_uart_baudrate_menu();
             break;
         case 4:
+            sm->state = CLI_STATE_DEBUG;
+            show_statistics_debug_menu();
+            break;
+        case 5:
             sm->state = CLI_STATE_ABOUT;
             show_about_menu();
             break;
@@ -877,7 +906,7 @@ static void handle_set_uart_baudrate(const char *input)
     }
 
     if (menu_id > 0 && menu_id <= sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0])) {
-        set_uart_baudrate(s_supported_baudrates[menu_id - 1]);
+        uart_bridge_set_baudrate(s_supported_baudrates[menu_id - 1]);
         printf("Set baudrate to %" PRIu32 " success\n", s_supported_baudrates[menu_id - 1]);
         sm->state = CLI_STATE_MAIN;
         show_main_menu();
@@ -887,6 +916,135 @@ static void handle_set_uart_baudrate(const char *input)
     printf("***Invalid input: %s\n", input);
     show_uart_baudrate_menu();
 }
+
+static void handle_statistics_debug_menu(const char *input)
+{
+    cli_state_machine_t *sm = &s_cli_sm;
+
+    if (!input) {
+        show_statistics_debug_menu();
+        return;
+    }
+
+    int menu_id = atoi(input);
+    switch (menu_id) {
+        case 0:
+            // 退出当前菜单,回到主菜单
+            sm->state = CLI_STATE_MAIN;
+            show_main_menu();
+            break;
+        case 1:
+            // 显示统计信息
+            {
+                uart_bridge_stats_t stats;
+                esp_err_t ret = uart_bridge_get_stats(&stats);
+                
+                printf("\n=== UART Bridge Statistics ===\n");
+                if (ret == ESP_OK) {
+                    printf("UART Communication:\n");
+                    printf(" TX Bytes        : %" PRIu32 "\n", stats.uart_tx_bytes);
+                    printf(" RX Bytes        : %" PRIu32 "\n", stats.uart_rx_bytes);
+                    printf(" TX Drop Bytes   : %" PRIu32 "\n", stats.uart_tx_drop_bytes);
+                    printf(" TX Error Bytes  : %" PRIu32 "\n", stats.uart_tx_error_bytes);
+                    printf("TCP Communication:\n");
+                    printf(" TX Bytes        : %" PRIu32 "\n", stats.tcp_tx_bytes);
+                    printf(" RX Bytes        : %" PRIu32 "\n", stats.tcp_rx_bytes);
+                    printf(" TX Error Bytes  : %" PRIu32 "\n", stats.tcp_tx_error_bytes);
+                    printf("Connection Statistics:\n");
+                    printf(" Connects        : %" PRIu32 "\n", stats.tcp_connect_count);
+                    printf(" Disconnects     : %" PRIu32 "\n", stats.tcp_disconnect_count);
+                } else {
+                    printf("***Failed to get statistics: %s\n", esp_err_to_name(ret));
+                }
+                printf("--------\n");
+                printf("Input [Enter] to return\n");
+            }
+            break;
+        case 2:
+            // 重置统计信息
+            {
+                esp_err_t ret = uart_bridge_reset_stats();
+                if (ret == ESP_OK) {
+                    printf("Statistics reset successfully\n");
+                } else {
+                    printf("***Failed to reset statistics: %s\n", esp_err_to_name(ret));
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        case 3:
+            // Uart TX Verbose
+            {
+                if (uart_bridge_set_uart_verbose(true, false)) {
+                    printf("UART TX verbose enabled\n");
+                } else {
+                    printf("***Failed to set UART TX verbose\n");
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        case 4:
+            // Uart RX Verbose
+            {
+                if (uart_bridge_set_uart_verbose(false, true)) {
+                    printf("UART RX verbose enabled\n");
+                } else {
+                    printf("***Failed to set UART RX verbose\n");
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        case 5:
+            // Uart TX & RX Verbose
+            {
+                if (uart_bridge_set_uart_verbose(true, true)) {
+                    printf("UART TX & RX verbose enabled\n");
+                } else {
+                    printf("***Failed to set UART TX & RX verbose\n");
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        case 6:
+            // TCP TX Verbose
+            {
+                if (uart_bridge_set_tcp_verbose(true, false)) {
+                    printf("TCP TX verbose enabled\n");
+                } else {
+                    printf("***Failed to set TCP TX verbose (TCP server may not be running)\n");
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        case 7:
+            // TCP RX Verbose
+            {
+                if (uart_bridge_set_tcp_verbose(false, true)) {
+                    printf("TCP RX verbose enabled\n");
+                } else {
+                    printf("***Failed to set TCP RX verbose (TCP server may not be running)\n");
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        case 8:
+            // TCP TX & RX Verbose
+            {
+                if (uart_bridge_set_tcp_verbose(true, true)) {
+                    printf("TCP TX & RX verbose enabled\n");
+                } else {
+                    printf("***Failed to set TCP TX & RX verbose (TCP server may not be running)\n");
+                }
+                show_statistics_debug_menu();
+            }
+            break;
+        default:
+            printf("***Invalid input: %s\n", input);
+            show_statistics_debug_menu();
+            break;
+    }
+}
+
 
 static void return_to_main_menu(const char *input)
 {

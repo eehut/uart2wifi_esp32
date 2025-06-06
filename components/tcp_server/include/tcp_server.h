@@ -138,6 +138,15 @@ int tcp_server_get_client_count(tcp_server_handle_t server_handle);
  */
 esp_err_t tcp_server_disconnect_client(tcp_server_handle_t server_handle, tcp_client_t *client);
 
+/**
+ * @brief 设置TCP服务器日志级别
+ * 
+ * @param server_handle TCP服务器句柄
+ * @param tx_verbose 是否打印发送数据
+ * @param rx_verbose 是否打印接收数据
+ */
+void tcp_server_set_verbose(tcp_server_handle_t server_handle, bool tx_verbose, bool rx_verbose);   
+
 #ifdef __cplusplus
 }
 #endif

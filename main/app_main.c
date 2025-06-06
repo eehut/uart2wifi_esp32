@@ -66,8 +66,8 @@ void app_main(void)
     //esp_log_level_set("app_event", ESP_LOG_DEBUG);
     esp_log_level_set("display", ESP_LOG_DEBUG);
     esp_log_level_set("wifi_station", ESP_LOG_DEBUG);
-    esp_log_level_set("tcp_server", ESP_LOG_DEBUG);
-    esp_log_level_set("uart_bridge", ESP_LOG_DEBUG);
+    //esp_log_level_set("tcp_server", ESP_LOG_DEBUG);
+    //esp_log_level_set("uart_bridge", ESP_LOG_DEBUG);
 
     // 初始化APP事件循环, GPIO按键事件处理
     app_event_loop_init(32, 5);  // 增加队列大小到32

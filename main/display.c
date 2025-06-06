@@ -73,6 +73,7 @@ typedef enum {
     MSG_ID_START_CONNECTING_NETWORK,
     MSG_ID_NO_SAVED_NETWORK,
     MSG_ID_START_SCANING_NETWORK,
+    MSG_ID_STATISTICS_CLEARED,
 }popup_msg_id_t;
 
 
@@ -344,21 +345,15 @@ esp_err_t display_task_start(void)
     ctx->page.home.signal_level = 0;
     strcpy(ctx->page.home.ssid, "N/A");
     strcpy(ctx->page.home.ip_address, "0.0.0.0");
-    ctx->page.home.baudrate = 115200;
+    ctx->page.home.baudrate = 0;
     ctx->page.home.rx_bytes = 0;
     ctx->page.home.tx_bytes = 0;
     ctx->page.home.client_num = 0;
-    ctx->page.home.ip_port = 5678;
+    ctx->page.home.ip_port = 0;
 
     ctx->page.uart.selected_index = 0;
     ctx->page.uart.display_num =4;
     ctx->page.uart.baudrate_num = sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0]);
-    for (int i = 0; i < ctx->page.uart.baudrate_num; i++) {
-        if (ctx->page.home.baudrate == s_supported_baudrates[i]) {
-            ctx->page.uart.selected_index = i;
-            break;
-        }
-    }
 
     // 创建显示任务
     BaseType_t ret = xTaskCreate(
@@ -457,8 +452,19 @@ static void display_task(void *arg)
             ESP_LOGI(TAG, "page changed from %d to %d", ctx->page.previous_page, ctx->page.current_page);
             ctx->page.page_changed = false;
 
+            if (ctx->page.current_page == PAGE_UART) 
+            {
+                // 计算当前波特率在支持的波特率列表中的索引
+                for (int i = 0; i < ctx->page.uart.baudrate_num; i++) {
+                    if (ctx->page.home.baudrate == s_supported_baudrates[i]) {
+                        ctx->page.uart.selected_index = i;
+                        break;
+                    }
+                }
+            }
             // 进入网络页面时,触发网络相关逻辑启动 
-            if (ctx->page.current_page == PAGE_NETWORK) {
+            else if (ctx->page.current_page == PAGE_NETWORK) 
+            {
                 
                 // 初始化网络页面状态
                 ctx->page.network.state = PAGE_STATE_ENTER_NETWORK_PAGE;
@@ -672,10 +678,10 @@ static void display_update_data(display_context_t* ctx)
 
         if ((home->client_num != uart_status.tcp_client_num)
             || (home->ip_port != uart_status.tcp_port)
-            || (home->baudrate != uart_status.baudrate)) {
+            || (home->baudrate != uart_status.uart_baudrate)) {
             home->client_num = uart_status.tcp_client_num;
             home->ip_port = uart_status.tcp_port;
-            home->baudrate = uart_status.baudrate;
+            home->baudrate = uart_status.uart_baudrate;
             need_refresh = true;
         }        
     }
@@ -904,111 +910,6 @@ static void draw_home_page(display_context_t* ctx)
 
 }
 
-#if 0
-static void draw_home_page1(display_context_t* ctx)
-{
-    page_home_data_t* home = &ctx->page.home;
-
-    // 初始化显示内容
-    const lcd_mono_img_t* signal_img = NULL;
-
-    // 在右上角(x=114,y=1)显示信号满格图标
-    switch(home->signal_level) {
-        case 1:
-            signal_img = LCD_IMG(signal_1);
-            break;
-        case 2:
-            signal_img = LCD_IMG(signal_2);
-            break;
-        case 3:
-            signal_img = LCD_IMG(signal_3);
-            break;
-        case 4:
-            signal_img = LCD_IMG(signal_4);
-            break;
-        default:
-            signal_img = LCD_IMG(no_signal_2);
-            break;                
-    }
-
-#define LINE1_BOTTOM_Y    12    
-#define LINE1_BOTTOM_WIDTH 128
-#define LINE2_TEXT_Y LINE1_BOTTOM_Y + 3
-#define LINE3_TEXT_Y LINE2_TEXT_Y + 3 + 16
-#define LINE4_TOP_Y LINE3_TEXT_Y + 2 + 16
-#define LINE4_TEXT_Y LINE4_TOP_Y + 3
-
-    if (signal_img) {   
-        lcd_display_mono_img(ctx->lcd_handle, 114, 1, signal_img, false);
-    }
-
-    lcd_display_string(ctx->lcd_handle, 0, 2, home->ip_address, LCD_FONT(ascii_8x8), false);
-
-    // 显示状态信息, 如果是离线,显示OFFLINE, 如果是已连接,显示IP地址.
-    if (home->wifi_state == WIFI_STATE_CONNECTED) {
-        lcd_display_string(ctx->lcd_handle, 0, 2, home->ip_address, LCD_FONT(ascii_8x8), false);
-    } else if (home->wifi_state == WIFI_STATE_CONNECTING) {
-        lcd_display_string(ctx->lcd_handle, 0, 2, "CONNECT...", LCD_FONT(ascii_8x8), false);
-    } else {
-        lcd_display_string(ctx->lcd_handle, 0, 2, "OFFLINE", LCD_FONT(ascii_8x8), false);
-    }
-
-    // 绘制基础线条
-    lcd_draw_horizontal_line(ctx->lcd_handle, 0, LINE1_BOTTOM_Y, LINE1_BOTTOM_WIDTH, 2, false);
-    
-    // 如果动画位置大于0，擦除对应位置的像素
-    if (home->animation_line.eraser_position > 0) {
-        // 擦除左边
-        if (64 - home->animation_line.eraser_position >= 0) {
-            lcd_clear_area(ctx->lcd_handle, 
-                64 - home->animation_line.eraser_position - 1, 
-                LINE1_BOTTOM_Y, 
-                4, 
-                2);
-        }
-        // 擦除右边
-        if (64 + home->animation_line.eraser_position < 128) {
-            lcd_clear_area(ctx->lcd_handle, 
-                64 + home->animation_line.eraser_position - 1, 
-                LINE1_BOTTOM_Y, 
-                4, 
-                2);
-        }
-    }
-
-    // 第二行：显示网络图标和SSID (y=20)
-    lcd_display_mono_img(ctx->lcd_handle, 0, LINE2_TEXT_Y, LCD_IMG(network), false);
-    if (home->wifi_state == WIFI_STATE_CONNECTED) {
-        lcd_display_string(ctx->lcd_handle, 20, LINE2_TEXT_Y + 1, home->ssid, LCD_FONT(ascii_8x16), false);
-    } else if (home->wifi_state == WIFI_STATE_CONNECTING) {
-        lcd_display_string(ctx->lcd_handle, 20, LINE2_TEXT_Y + 1, home->ssid, LCD_FONT(ascii_8x16), false);
-    } else {
-        lcd_display_string(ctx->lcd_handle, 20, LINE2_TEXT_Y + 1, "N/A", LCD_FONT(ascii_8x16), false);
-    }
-
-    // 第三行：显示串口图标和波特率 (y=36)
-    char baudrate_str[16];
-    snprintf(baudrate_str, sizeof(baudrate_str), "%" PRIu32, home->baudrate);
-    lcd_display_mono_img(ctx->lcd_handle, 0, LINE3_TEXT_Y - 1, LCD_IMG(serial), false);
-    lcd_display_string(ctx->lcd_handle, 20, LINE3_TEXT_Y, baudrate_str, LCD_FONT(ascii_8x16), false);
-
-    // 第四行：显示收发字节数 (y=52)
-    char rx_str[16], tx_str[16];
-    snprintf(rx_str, sizeof(rx_str), "R:%" PRIu32, home->rx_bytes);
-    snprintf(tx_str, sizeof(tx_str), "T:%" PRIu32, home->tx_bytes);
-    
-    // 绘制行四上边界
-    lcd_draw_horizontal_line(ctx->lcd_handle, 0, LINE4_TOP_Y, 128, 1, false);
-
-    // 绘制中间的竖线
-    lcd_draw_vertical_line(ctx->lcd_handle, 64, LINE4_TOP_Y, 64 - LINE4_TOP_Y, 1, false);
-    
-    // 显示接收和发送字节数
-    lcd_display_string(ctx->lcd_handle, 2, LINE4_TEXT_Y, rx_str, LCD_FONT(ascii_8x8), false);
-    lcd_display_string(ctx->lcd_handle, 66, LINE4_TEXT_Y, tx_str, LCD_FONT(ascii_8x8), false);
-}
-#endif
-
 #define POPUP_WIDTH     108
 #define POPUP_HEIGHT    44
 #define POPUP_MARGIN    3
@@ -1042,6 +943,9 @@ static void draw_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id)
     } else if (msg_id == MSG_ID_START_SCANING_NETWORK) {
         line1 = "Start";
         line2 = "Scanning";
+    } else if (msg_id == MSG_ID_STATISTICS_CLEARED) {
+        line1 = "Statistics";
+        line2 = "Cleared";
     } else {
         ESP_LOGE(TAG, "invalid popup message id: %d", msg_id);
         return;
@@ -1330,6 +1234,17 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
             
         case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
             ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);  
+            // 长按3秒, 清除统计信息, 并显示弹出框, 显示已清除.
+            if (data->data.button.long_pressed >= 3) {
+                if (ctx->page.current_page == PAGE_HOME && ctx->popup.current_popup != POPUP_MENU) 
+                {
+                    // 清除统计信息
+                    uart_bridge_reset_stats();
+                    // 显示弹出框, 显示已清除.
+                    active_popup_msg(ctx, MSG_ID_STATISTICS_CLEARED);
+                }
+            }
+
             break;
             
         case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
@@ -1439,8 +1354,10 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
                 {
                     // 获取选中的波特率
                     ctx->page.home.baudrate = s_supported_baudrates[ctx->page.uart.selected_index];
-                    // TODO: 保存到配置
-                    ESP_LOGI(TAG, "TODO: apply baudrate: %u", ctx->page.home.baudrate);
+
+                    // 设置波特率
+                    uart_bridge_set_baudrate(ctx->page.home.baudrate);
+
                     // 返回主页
                     switch_page(ctx, PAGE_HOME);
                 }

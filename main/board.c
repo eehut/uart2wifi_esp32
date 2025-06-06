@@ -11,6 +11,7 @@
  */
 
 #include "driver/gpio.h"
+#include "driver/uart.h"
 #include "export_ids.h"
 #include "ext_gpio.h"
 #include "bus_manager.h"
@@ -41,9 +42,9 @@ static const i2c_bus_config_t s_i2c_bus_config = {
 
 
 static const uart_hw_config_t s_uart_hw_config = {
-    .uart_port = 1,
-    .rxd_pin = GPIO_NUM_1,
-    .txd_pin = GPIO_NUM_0,
+    .uart_port = UART_NUM_1,
+    .rxd_pin = GPIO_NUM_3,
+    .txd_pin = GPIO_NUM_4,
 };
 
 /**
