@@ -74,10 +74,12 @@ typedef struct {
     char input_buffer[128];  // 用于多步骤输入
 } cli_state_machine_t;
 
-static const uint32_t s_supported_baudrates[] = {
+const uint32_t g_supported_baudrates[] = {
     9600, 19200, 38400, 57600, 115200, 
     230400, 460800, 921600, 1500000
 };
+
+const int g_supported_baudrates_count = sizeof(g_supported_baudrates) / sizeof(g_supported_baudrates[0]);
 
 static cli_state_machine_t s_cli_sm = {0};
 
@@ -341,8 +343,8 @@ static void show_uart_baudrate_menu(void)
     uart_bridge_status_t bridge_status = {0};
     uart_bridge_get_status(&bridge_status);
 
-    for (int i = 0; i < sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0]); i++) {
-        printf("%d. %" PRIu32 " %s\n", i + 1, s_supported_baudrates[i], bridge_status.uart_baudrate == s_supported_baudrates[i] ? "<" : "");
+    for (int i = 0; i < g_supported_baudrates_count; i++) {
+        printf("%d. %" PRIu32 " %s\n", i + 1, g_supported_baudrates[i], bridge_status.uart_baudrate == g_supported_baudrates[i] ? "<" : "");
     }
 
     printf("--------\n");
@@ -905,9 +907,9 @@ static void handle_set_uart_baudrate(const char *input)
         return;
     }
 
-    if (menu_id > 0 && menu_id <= sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0])) {
-        uart_bridge_set_baudrate(s_supported_baudrates[menu_id - 1]);
-        printf("Set baudrate to %" PRIu32 " success\n", s_supported_baudrates[menu_id - 1]);
+    if (menu_id > 0 && menu_id <= g_supported_baudrates_count) {
+        uart_bridge_set_baudrate(g_supported_baudrates[menu_id - 1]);
+        printf("Set baudrate to %" PRIu32 " success\n", g_supported_baudrates[menu_id - 1]);
         sm->state = CLI_STATE_MAIN;
         show_main_menu();
         return;

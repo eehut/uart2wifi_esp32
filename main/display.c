@@ -175,10 +175,9 @@ typedef struct {
     sys_tick_t data_update_time;
 }display_context_t;
 
-
-static const uint32_t s_supported_baudrates[] = {
-    9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
-};
+// 支持的波特率列表, 已在cli_impl.c中定义
+extern const uint32_t g_supported_baudrates[];
+extern const int g_supported_baudrates_count;
 
 // 显示上下文全局变量
 static display_context_t s_display_context = { 0 };
@@ -353,7 +352,7 @@ esp_err_t display_task_start(void)
 
     ctx->page.uart.selected_index = 0;
     ctx->page.uart.display_num =4;
-    ctx->page.uart.baudrate_num = sizeof(s_supported_baudrates) / sizeof(s_supported_baudrates[0]);
+    ctx->page.uart.baudrate_num = g_supported_baudrates_count;
 
     // 创建显示任务
     BaseType_t ret = xTaskCreate(
@@ -456,7 +455,7 @@ static void display_task(void *arg)
             {
                 // 计算当前波特率在支持的波特率列表中的索引
                 for (int i = 0; i < ctx->page.uart.baudrate_num; i++) {
-                    if (ctx->page.home.baudrate == s_supported_baudrates[i]) {
+                    if (ctx->page.home.baudrate == g_supported_baudrates[i]) {
                         ctx->page.uart.selected_index = i;
                         break;
                     }
@@ -1107,7 +1106,7 @@ static void draw_uart_page(display_context_t* ctx)
         }
 
         char buffer[16];
-        snprintf(buffer, sizeof(buffer), "%u", (unsigned int)s_supported_baudrates[start_index + i]);
+        snprintf(buffer, sizeof(buffer), "%u", (unsigned int)g_supported_baudrates[start_index + i]);
         
         // 如果是当前波特率，在行首显示'>'符号
         if ((start_index + i) == ctx->page.uart.selected_index) {
@@ -1353,7 +1352,7 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
                 else if (ctx->page.current_page == PAGE_UART) 
                 {
                     // 获取选中的波特率
-                    ctx->page.home.baudrate = s_supported_baudrates[ctx->page.uart.selected_index];
+                    ctx->page.home.baudrate = g_supported_baudrates[ctx->page.uart.selected_index];
 
                     // 设置波特率
                     uart_bridge_set_baudrate(ctx->page.home.baudrate);
