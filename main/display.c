@@ -20,8 +20,11 @@
 #include "time.h"
 #include "uptime.h"
 #include "wifi_station.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdint.h>
 #include <inttypes.h>
+#include "sdkconfig.h"
 
 static const char *TAG = "display";
 
@@ -89,6 +92,9 @@ typedef struct
     uint32_t tx_bytes;
     uint8_t client_num;
     uint16_t ip_port;
+    uint8_t cpu_usaged;
+
+    sys_tick_t cpu_usage_update_time;
 
     struct {
         uint8_t eraser_position;
@@ -145,6 +151,7 @@ typedef struct {
  */
 typedef struct {
     bool initialized;
+    bool cpu_usage_enabled;
 
     TaskHandle_t task_handle;
     lcd_handle_t lcd_handle;
@@ -228,6 +235,8 @@ static void switch_page(display_context_t* ctx, display_page_t target)
     if (ctx->page.current_page == target) {
         return;
     }
+
+    ESP_LOGD(TAG, "switch page from %d to %d", ctx->page.current_page, target);
 
     ctx->page.previous_page = ctx->page.current_page;
     ctx->page.current_page = target;    
@@ -349,6 +358,9 @@ esp_err_t display_task_start(void)
     ctx->page.home.tx_bytes = 0;
     ctx->page.home.client_num = 0;
     ctx->page.home.ip_port = 0;
+    ctx->cpu_usage_enabled = false;
+    ctx->page.home.cpu_usaged = 0;
+    ctx->page.home.cpu_usage_update_time = uptime();
 
     ctx->page.uart.selected_index = 0;
     ctx->page.uart.display_num =4;
@@ -448,7 +460,7 @@ static void display_task(void *arg)
         // 检查是否发生了切页 
         if (ctx->page.page_changed)
         {
-            ESP_LOGI(TAG, "page changed from %d to %d", ctx->page.previous_page, ctx->page.current_page);
+            //ESP_LOGI(TAG, "page changed from %d to %d", ctx->page.previous_page, ctx->page.current_page);
             ctx->page.page_changed = false;
 
             if (ctx->page.current_page == PAGE_UART) 
@@ -600,13 +612,112 @@ static void display_task(void *arg)
     }
 }
 
+#if !defined(CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS)
+#error "Please enable CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS in sdkconfig"
+#endif
 
+// CPU使用率统计静态变量
+static struct {
+    configRUN_TIME_COUNTER_TYPE last_run_time;
+    configRUN_TIME_COUNTER_TYPE last_idle_time;
+    bool initialized;
+} cpu_usage_context = {0};
+
+// CPU使用率统计函数
+static uint8_t get_cpu_usage(void) {
+    TaskStatus_t *pxTaskStatusArray = NULL;
+    UBaseType_t uxArraySize;
+    configRUN_TIME_COUNTER_TYPE current_run_time, current_idle_time = 0;
+    uint8_t cpu_usage = 0;
+    
+    // 获取任务数量，添加一些缓冲
+    uxArraySize = uxTaskGetNumberOfTasks() + 4;
+    
+    // 分配内存存储任务状态
+    pxTaskStatusArray = pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
+    if (pxTaskStatusArray == NULL) {
+        ESP_LOGW(TAG, "Failed to allocate memory for CPU usage calculation");
+        return 0;
+    }
+    
+    // 获取当前系统状态
+    uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &current_run_time);
+    if (uxArraySize == 0) {
+        vPortFree(pxTaskStatusArray);
+        return 0;
+    }
+    
+    // 计算IDLE任务的运行时间（通常IDLE任务名为"IDLE"或"IDLE0"、"IDLE1"等）
+    ESP_LOGD(TAG, "Task list (%d tasks):", uxArraySize);
+    for (UBaseType_t i = 0; i < uxArraySize; i++) {
+        ESP_LOGD(TAG, "  %s: runtime=%"PRIu32, pxTaskStatusArray[i].pcTaskName, pxTaskStatusArray[i].ulRunTimeCounter);
+        if (strncmp(pxTaskStatusArray[i].pcTaskName, "IDLE", 4) == 0) {
+            current_idle_time += pxTaskStatusArray[i].ulRunTimeCounter;
+        }
+    }
+    ESP_LOGD(TAG, "Current total runtime: %"PRIu32", idle time: %"PRIu32, current_run_time, current_idle_time);
+    
+    // 如果是第一次调用，只保存当前值，不计算CPU使用率
+    if (!cpu_usage_context.initialized) {
+        cpu_usage_context.last_run_time = current_run_time;
+        cpu_usage_context.last_idle_time = current_idle_time;
+        cpu_usage_context.initialized = true;
+        cpu_usage = 0;
+        ESP_LOGD(TAG, "First call, initializing with total=%"PRIu32", idle=%"PRIu32, current_run_time, current_idle_time);
+    } else {
+        // 计算时间差
+        configRUN_TIME_COUNTER_TYPE total_elapsed_time = current_run_time - cpu_usage_context.last_run_time;
+        configRUN_TIME_COUNTER_TYPE idle_elapsed_time = current_idle_time - cpu_usage_context.last_idle_time;
+        
+        ESP_LOGD(TAG, "Time diff: total=%"PRIu32", idle=%"PRIu32, total_elapsed_time, idle_elapsed_time);
+        
+        if (total_elapsed_time > 0) {
+            // CPU使用率 = (总时间 - 空闲时间) / 总时间 * 100
+            // 考虑多核情况，除以核心数
+            uint32_t used_time = total_elapsed_time - idle_elapsed_time;
+            uint32_t adjusted_total = total_elapsed_time / CONFIG_FREERTOS_NUMBER_OF_CORES;
+            uint32_t usage_percentage = (used_time * 100) / adjusted_total;
+            
+            ESP_LOGD(TAG, "CPU calc: used=%"PRIu32", adjusted_total=%"PRIu32", percentage=%"PRIu32"%%", 
+                used_time, adjusted_total, usage_percentage);
+            
+            // 限制在0-100%范围内
+            if (usage_percentage > 100) {
+                usage_percentage = 100;
+            }
+            
+            cpu_usage = (uint8_t)usage_percentage;
+        }
+        
+        // 更新上一次的值
+        cpu_usage_context.last_run_time = current_run_time;
+        cpu_usage_context.last_idle_time = current_idle_time;
+    }
+    
+    // 释放内存
+    vPortFree(pxTaskStatusArray);
+    
+    return cpu_usage;
+}
 
 static void display_update_data(display_context_t* ctx)
 {
     page_home_data_t* home = &ctx->page.home;
     wifi_connection_status_t wifi_status = {0};
     bool need_refresh = false;
+    sys_tick_t now = uptime();
+
+    // 每隔一秒更新CPU使用率
+    if (ctx->cpu_usage_enabled) {
+        if (uptime_after(now, home->cpu_usage_update_time)) {
+            home->cpu_usage_update_time = now + 1000;
+            uint8_t cpu_usaged = get_cpu_usage();
+            if (cpu_usaged != home->cpu_usaged) {
+                home->cpu_usaged = cpu_usaged;
+                need_refresh = true;
+            }
+        }
+    }
 
     // 获取WiFi状态
     if (wifi_station_get_status(&wifi_status) == ESP_OK) {
@@ -794,14 +905,20 @@ static void draw_home_page(display_context_t* ctx)
     // 显示一个行, 行高为1
     lcd_draw_horizontal_line(ctx->lcd_handle, 0, LINE4_TOP_Y, 128, 1, false);
 
-    lcd_display_string(ctx->lcd_handle, 0, LINE4_TEXT_Y, "R/T", LCD_FONT(ascii_8x8), false);
-
-    char stat_str[20];
+    char stat_str[32];
     snprintf(stat_str, sizeof(stat_str), "%" PRIu32 "/%" PRIu32, home->rx_bytes, home->tx_bytes);
     // 右对齐显示, 需要根据长度计算X坐标
     int text_width = strlen(stat_str) * 8; // ascii_8x16字体宽度为8
-    int x = 128 - text_width;
+    int x = (text_width > 128) ? 0 : (128 - text_width);
     lcd_display_string(ctx->lcd_handle, x, LINE4_TEXT_Y, stat_str, LCD_FONT(ascii_8x8), false);
+
+    // 最后一行, 右对齐显示统计信息, 左侧有空间才显示标题 
+    const char *stats_title = "R/T";
+    text_width = strlen(stats_title) * 8;
+    if (x >= text_width) {
+        lcd_display_string(ctx->lcd_handle, 0, LINE4_TEXT_Y, stats_title, LCD_FONT(ascii_8x8), false);
+    }
+
 
     // 如果动画位置大于0，擦除对应位置的像素
     if (home->animation_line.eraser_position > 0) {
@@ -907,6 +1024,15 @@ static void draw_home_page(display_context_t* ctx)
 
     #endif  
 
+    // 显示CPU使用率
+    if (ctx->cpu_usage_enabled) {
+        char cpu_usage_str[8];
+        snprintf(cpu_usage_str, sizeof(cpu_usage_str), "%" PRIu8, home->cpu_usaged);
+        text_width = strlen(cpu_usage_str) * 8;
+        // 显示在右上角, 需要根据长度计算X坐标
+        int x = (text_width > 128) ? 0 : (128 - text_width);
+        lcd_display_string(ctx->lcd_handle, x, 0, cpu_usage_str, LCD_FONT(ascii_8x8), false);
+    }
 }
 
 #define POPUP_WIDTH     108
@@ -1224,15 +1350,15 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
     // 根据事件类型进行不同处理
     switch(id) {
         case EXT_GPIO_EVENT_BUTTON_PRESSED:
-            ESP_LOGI(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
+            ESP_LOGD(TAG, "button event: [%s] pressed, click_count: %d", data->gpio_name, data->data.button.click_count);
             break; 
             
         case EXT_GPIO_EVENT_BUTTON_RELEASED:
-            ESP_LOGI(TAG, "button event: [%s] released", data->gpio_name);         
+            ESP_LOGD(TAG, "button event: [%s] released", data->gpio_name);         
             break;
             
         case EXT_GPIO_EVENT_BUTTON_LONG_PRESSED:
-            ESP_LOGI(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);  
+            ESP_LOGD(TAG, "button event: [%s] long pressed up to %d seconds", data->gpio_name, data->data.button.long_pressed);  
             // 长按3秒, 清除统计信息, 并显示弹出框, 显示已清除.
             if (data->data.button.long_pressed >= 3) {
                 if (ctx->page.current_page == PAGE_HOME && ctx->popup.current_popup != POPUP_MENU) 
@@ -1247,7 +1373,7 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
             break;
             
         case EXT_GPIO_EVENT_BUTTON_CONTINUE_CLICK:
-            ESP_LOGI(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
+            ESP_LOGD(TAG, "button event: [%s] continue click stopped, click count: %d", data->gpio_name, data->data.button.click_count);
 
             /*
             主页:
@@ -1401,6 +1527,16 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
                     // 返回主页
                     switch_page(ctx, PAGE_HOME);
                 }
+            } else if (data->data.button.click_count == 3) {
+                // 三击切换CPU使用率显示
+                ctx->cpu_usage_enabled = !ctx->cpu_usage_enabled;
+
+                if (ctx->cpu_usage_enabled) {
+                    ctx->page.home.cpu_usaged = 0;
+                    ctx->page.home.cpu_usage_update_time = uptime();
+                } 
+
+                ESP_LOGI(TAG, "CPU usage display %s", ctx->cpu_usage_enabled ? "enabled" : "disabled");
             }
             break;
     }

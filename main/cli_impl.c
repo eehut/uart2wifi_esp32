@@ -379,8 +379,9 @@ static void show_about_menu(void)
     printf("Product  : WiFi-UART Bridge\n");
     printf("Model    : ESP32-C3 Pro\n");
     printf("SN       : SN20250520\n");
-    printf("Version  : V1.0.0\n");
+    printf("Version  : %s\n", APP_VERSION);
     printf("Released : %s %s\n", __DATE__, __TIME__);
+    printf("IDF      : %s\n", esp_get_idf_version());
     printf("--------\n");
     printf("Copyright (c) 2025 LiuChuansen\n");
     printf("All rights reserved.\n");
