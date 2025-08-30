@@ -27,8 +27,18 @@
 #include "lwip/sys.h"
 
 #include <inttypes.h>
+#include <stdlib.h>
 
 static const char *TAG = "wifi_station";
+
+// 比较函数，用于qsort按RSSI降序排序
+static int compare_ap_by_rssi(const void *a, const void *b) {
+    const wifi_ap_record_t *ap_a = (const wifi_ap_record_t *)a;
+    const wifi_ap_record_t *ap_b = (const wifi_ap_record_t *)b;
+    
+    // 返回负值表示a应该排在b前面（RSSI越高越好，所以用降序）
+    return ap_b->rssi - ap_a->rssi;
+}
 
 // NVS命名空间
 #define NVS_NAMESPACE "wifi_records"
@@ -546,6 +556,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
                     ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, s_wifi_ctx.last_scan_result));
                     s_wifi_ctx.last_scan_ap_count = ap_count;
                     s_wifi_ctx.scan_done = true;
+
+                    // 根据RSSI信号强度排序（从强到弱）
+                    if (ap_count > 1) {
+                        qsort(s_wifi_ctx.last_scan_result, ap_count, sizeof(wifi_ap_record_t), compare_ap_by_rssi);
+                        ESP_LOGI(TAG, "Sorted %d APs by RSSI signal strength", ap_count);
+                    }
                     
                     const char* scan_type = "";
                     if (s_wifi_ctx.user_scan_requested && s_wifi_ctx.background_scan_requested) {
@@ -1163,6 +1179,8 @@ esp_err_t wifi_station_get_scan_result(wifi_network_info_t *networks, uint16_t *
         xSemaphoreGive(s_wifi_ctx.mutex);
         return ESP_ERR_INVALID_STATE;
     }
+
+    ESP_LOGI(TAG, "Get scan result, found: %d, max return: %d", s_wifi_ctx.last_scan_ap_count, *count);
 
     uint16_t output_count = (*count < s_wifi_ctx.last_scan_ap_count) ? *count : s_wifi_ctx.last_scan_ap_count;
     
