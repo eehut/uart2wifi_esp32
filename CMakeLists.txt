@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 set(VERSION_PRIMARY   1)
-set(VERSION_SECONDARY 0)
+set(VERSION_SECONDARY 1)
 
 # Get Git commit hash and dirty state
 find_package(Git)
@@ -34,7 +34,12 @@ project(serial2ip_esp32)
 set(APP_VERSION "v${VERSION_PRIMARY}.${VERSION_SECONDARY}-g${GIT_SHORT_HASH}${GIT_DIRTY_STR}")
 message(STATUS "Project version: ${APP_VERSION}")
 
+# Get current date in YYYYMMDD format
+string(TIMESTAMP BUILD_DATE "%Y%m%d" UTC)
+message(STATUS "Build date: ${BUILD_DATE}")
+
 idf_component_get_property(main main COMPONENT_LIB)
 target_compile_definitions(${main} PRIVATE
     "APP_VERSION=\"${APP_VERSION}\""
+    "BUILD_DATE=\"${BUILD_DATE}\""
 )

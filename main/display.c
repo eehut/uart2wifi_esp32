@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include "sdkconfig.h"
+#include "version.h"
 
 static const char *TAG = "display";
 
@@ -152,6 +153,7 @@ typedef struct {
 typedef struct {
     bool initialized;
     bool cpu_usage_enabled;
+    bool force_help_mode;  // 强制帮助页模式，没有配网时启用
 
     TaskHandle_t task_handle;
     lcd_handle_t lcd_handle;
@@ -344,11 +346,31 @@ esp_err_t display_task_start(void)
         return ESP_OK;
     }
 
+    // 检测保存的网络数量，决定是否启用强制帮助页模式
+    wifi_connection_record_t saved_networks[WIFI_STATION_MAX_RECORDS];
+    uint8_t saved_network_count = WIFI_STATION_MAX_RECORDS;
+    esp_err_t ret = wifi_station_get_records(saved_networks, &saved_network_count);
+    
+    if (ret != ESP_OK || saved_network_count == 0) {
+        // 没有保存的网络，启用强制帮助页模式
+        ctx->force_help_mode = true;
+        ESP_LOGI(TAG, "No saved networks found, entering force help mode");
+    } else {
+        ctx->force_help_mode = false;
+        ESP_LOGI(TAG, "Found %d saved networks, normal mode", saved_network_count);
+    }
+
     // 初始化页面数据
     ctx->page.dirty = true;
-    ctx->page.current_page = PAGE_HOME;
-    ctx->page.previous_page = PAGE_HOME;
-    ctx->page.page_expried_time = 0;
+    if (ctx->force_help_mode) {
+        ctx->page.current_page = PAGE_HELP;
+        ctx->page.previous_page = PAGE_HELP;
+        ctx->page.page_expried_time = 0; // 不设置超时，永久显示
+    } else {
+        ctx->page.current_page = PAGE_HOME;
+        ctx->page.previous_page = PAGE_HOME;
+        ctx->page.page_expried_time = 0;
+    }
     ctx->page.home.wifi_state = WIFI_STATE_DISCONNECTED;
     ctx->page.home.signal_level = 0;
     strcpy(ctx->page.home.ssid, "N/A");
@@ -367,7 +389,7 @@ esp_err_t display_task_start(void)
     ctx->page.uart.baudrate_num = g_supported_baudrates_count;
 
     // 创建显示任务
-    BaseType_t ret = xTaskCreate(
+    BaseType_t task_ret = xTaskCreate(
         display_task,
         "display_task",
         DISPLAY_TASK_STACK_SIZE,
@@ -376,7 +398,7 @@ esp_err_t display_task_start(void)
         &ctx->task_handle
     );
     
-    if (ret != pdPASS) {
+    if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create display task");
         return ESP_FAIL;
     }
@@ -451,8 +473,9 @@ static void display_task(void *arg)
             ctx->popup.dirty = true;
         }
 
-        // 检查页面是否超时
-        if (ctx->page.current_page != PAGE_HOME && 
+        // 检查页面是否超时（强制帮助页模式下不检查超时）
+        if (!ctx->force_help_mode && 
+            ctx->page.current_page != PAGE_HOME && 
             uptime_after(now, ctx->page.page_expried_time)) {
             switch_page(ctx, PAGE_HOME);
         }
@@ -706,6 +729,24 @@ static void display_update_data(display_context_t* ctx)
     wifi_connection_status_t wifi_status = {0};
     bool need_refresh = false;
     sys_tick_t now = uptime();
+
+    // 在强制帮助页模式下，定期检查网络数量变化
+    if (ctx->force_help_mode) {
+        wifi_connection_record_t saved_networks[WIFI_STATION_MAX_RECORDS];
+        uint8_t saved_network_count = WIFI_STATION_MAX_RECORDS;
+        esp_err_t ret = wifi_station_get_records(saved_networks, &saved_network_count);
+        
+        if (ret == ESP_OK && saved_network_count > 0) {
+            // 检测到有保存的网络，退出强制帮助页模式
+            ESP_LOGI(TAG, "Network configuration detected, exiting force help mode");
+            ctx->force_help_mode = false;
+            switch_page(ctx, PAGE_HOME);
+            return; // 退出强制帮助页模式后，本次不进行其他数据更新
+        } else {
+            // 仍然没有网络配置，在强制帮助页模式下不更新其他数据
+            return;
+        }
+    }
 
     // 每隔一秒更新CPU使用率
     if (ctx->cpu_usage_enabled) {
@@ -1318,13 +1359,68 @@ static void draw_network_page(display_context_t* ctx)
     }
 }
 
+/**
+ * @brief 从完整版本号中提取简短版本（如从"v1.0-g0786e3d"提取"v1.0"）
+ * 
+ * @param full_version 完整版本号
+ * @param short_version 输出的简短版本号缓冲区
+ * @param buffer_size 缓冲区大小
+ */
+static void extract_short_version(const char* full_version, char* short_version, size_t buffer_size)
+{
+    if (full_version == NULL || short_version == NULL || buffer_size == 0) {
+        return;
+    }
+    
+    // 找到'-'字符的位置
+    const char* dash_pos = strchr(full_version, '-');
+    if (dash_pos != NULL) {
+        // 计算要复制的长度（不包括'-'及其后面的内容）
+        size_t copy_length = dash_pos - full_version;
+        if (copy_length >= buffer_size) {
+            copy_length = buffer_size - 1;
+        }
+        strncpy(short_version, full_version, copy_length);
+        short_version[copy_length] = '\0';
+    } else {
+        // 没有找到'-'，直接复制整个字符串
+        strncpy(short_version, full_version, buffer_size - 1);
+        short_version[buffer_size - 1] = '\0';
+    }
+
+    // 找到第一个‘v’，将它转成大写 
+    char* v_pos = strchr(short_version, 'v');
+    if (v_pos != NULL) {
+        *v_pos = 'V';
+    }
+}
+
 static void draw_help_page(display_context_t* ctx)
 {
-    // 显示一个黑色块 
-    //lcd_fill_area(ctx->lcd_handle, 10, 10, 128-10, 40, 1);
 
-    // 绘制帮助页面
-    lcd_display_mono_img(ctx->lcd_handle, 32, 0, LCD_IMG(qrcode), false);
+    // 屏幕尺寸: 128x64
+    // 二维码尺寸: 64x64，放在右侧对齐
+    const int qr_size = 64;
+    const int qr_x = 128 - qr_size;  // 右对齐
+    const int qr_y = 0;
+    
+    // 绘制二维码（右对齐）
+    lcd_display_mono_img(ctx->lcd_handle, qr_x, qr_y, LCD_IMG(qrcode), false);
+    
+    // 在左侧显示版本信息
+    // 行1: 版本号（8x16字体）
+    char short_version[16];
+    extract_short_version(APP_VERSION, short_version, sizeof(short_version));
+    lcd_display_string(ctx->lcd_handle, 0, 0, short_version, LCD_FONT(ascii_8x16), false);
+    
+    // 行2: 编译日期（8x8字体，紧凑显示）
+    lcd_display_string(ctx->lcd_handle, 0, 18, BUILD_DATE, LCD_FONT(ascii_8x8), false);
+
+    // 行3: 显示文本“Scan for”， 8x8字体
+    lcd_display_string(ctx->lcd_handle, 0, 40, "SCAN FOR", LCD_FONT(ascii_8x8), false);
+
+    // 行4: 显示文本“help”， 8x8字体
+    lcd_display_string(ctx->lcd_handle, 0, 50, "  HELP", LCD_FONT(ascii_8x8), false);
 }
 
 
@@ -1346,6 +1442,12 @@ static void handle_button_event(display_context_t* ctx, const display_button_eve
 {
     const ext_gpio_event_data_t* data = &button_event->gpio_event;
     int32_t id = button_event->event_id;
+
+    // 在强制帮助页模式下，禁用所有按键响应
+    if (ctx->force_help_mode) {
+        ESP_LOGD(TAG, "Button event ignored in force help mode");
+        return;
+    }
 
     // 根据事件类型进行不同处理
     switch(id) {
