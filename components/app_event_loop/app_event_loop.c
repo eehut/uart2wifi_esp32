@@ -1,6 +1,6 @@
 /**
  * @file app_event_loop.c
- * @author Samuel (samuel@neptune-robotics.com)
+ * @author Samuel (179712066@qq.com)
  * @brief 应用事件循环组件实现
  * @version 0.1
  * @date 2025-05-11

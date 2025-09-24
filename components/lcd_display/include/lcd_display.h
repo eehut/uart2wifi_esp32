@@ -7,7 +7,7 @@ extern "C" {
 
 /**
  * @file lcd_display.h
- * @author Samuel (samuel@neptune-robotics.com)
+ * @author Samuel (179712066@qq.com)
  * @brief LCD显示驱动
  * @version 0.1
  * @date 2025-05-22

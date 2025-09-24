@@ -1,6 +1,6 @@
 /**
  * @file cli_impl.c
- * @author Samuel (samuel@neptune-robotics.com)
+ * @author Samuel (179712066@qq.com)
  * @brief 命令行状态机实现
  * @version 0.1
  * @date 2025-05-25

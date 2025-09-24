@@ -1,6 +1,6 @@
 /**
  * @file ext_gpio.h
- * @author Samuel (samuel@neptune-robotics.com)
+ * @author Samuel (179712066@qq.com)
  * @brief 扩展的GPIO驱动
  * @version 0.1
  * @date 2025-05-10

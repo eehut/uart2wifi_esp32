@@ -1,6 +1,6 @@
 /**
  * @file ext_gpio_event_type.h
- * @author Samuel (samuel@neptune-robotics.com)
+ * @author Samuel (179712066@qq.com)
  * @brief 扩展GPIO事件类型定义
  * @version 0.1
  * @date 2025-05-11

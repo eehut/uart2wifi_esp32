@@ -2,7 +2,7 @@
 
 /**
  * @file ext_gpio_drive.c
- * @author Samuel (samuel@neptune-robotics.com)
+ * @author Samuel (179712066@qq.com)
  * @brief low level functions for ext_gpio
  * @version 0.1
  * @date 2025-05-10
