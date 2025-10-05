@@ -1,16 +1,21 @@
 
 ## Serial2IP based on ESP32C3 with OLED supported
 
+### 实物图 
+
+![picture](docs/images/uart2wifi.png)
 
 ### 硬件 
 
 打淘宝搜索“天问 ESP32C3 Pro”，选择带屏的版本即可。
 
+### 外壳 
+
+[MakerWorld](https://makerworld.com.cn/models/1540586)
+
 ### 使用帮助
 
-
 [使用帮助](docs/user_guide.md)
-
 
 ### 测试 
 
