@@ -8,7 +8,7 @@
 #include "display.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "lcd_driver.h"
+#include "lcd_driver_i2c.h"
 #include "lcd_display.h"
 #include "uart_bridge.h"
 #include "lcd_models.h"
@@ -323,7 +323,7 @@ esp_err_t display_init(void)
     ESP_LOGI(TAG, "Display module initialized");
 
     s_display_context.initialized = true;
-    
+   
     return ESP_OK;
 }
 

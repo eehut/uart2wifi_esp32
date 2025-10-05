@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 set(VERSION_PRIMARY   1)
-set(VERSION_SECONDARY 1)
+set(VERSION_SECONDARY 2)
 
 # Get Git commit hash and dirty state
 find_package(Git)
