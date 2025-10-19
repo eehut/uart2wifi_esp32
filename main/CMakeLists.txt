@@ -12,3 +12,9 @@ target_compile_definitions(${ext_gpio} PRIVATE
     CONFIG_EXT_GPIO_CACHE_SIZE=4
     CONFIG_EXT_BUTTON_DEFAULT_LONG_PRESSED_SECOND=2
 )
+
+# 为lcd_font组件设置编译宏
+idf_component_get_property(lcd_font lcd_font COMPONENT_LIB)
+target_compile_definitions(${lcd_font} PRIVATE
+    CONFIG_LCD_FONT_HZK_16=1
+)

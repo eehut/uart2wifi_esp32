@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "cli_menu.h"
 #include "uart_bridge.h"
+#include "lcd_fonts.h"
 #include "version.h"
 
 static const char *TAG = "app_main";
@@ -85,6 +86,9 @@ void app_main(void)
         ret = nvs_flash_init();
     }    
     ESP_ERROR_CHECK(ret);
+
+    // 初始化字库
+    lcd_font_init();
 
     // 初始化网络接口
     ESP_ERROR_CHECK(esp_netif_init());

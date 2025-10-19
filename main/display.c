@@ -316,6 +316,8 @@ esp_err_t display_init(void)
     
     // 清屏
     lcd_fill(s_display_context.lcd_handle, 0x00);
+    // 设置默认字体, 只使用ASCII 8x16字体
+    lcd_set_default_fonts(s_display_context.lcd_handle, LCD_FONT(ascii_8x16), LCD_FONT(hzk16));
 
     // 注册按键事件处理函数
     app_event_handler_register(EXT_GPIO_EVENTS, ESP_EVENT_ANY_ID, button_event_handler, NULL);
@@ -921,9 +923,9 @@ static void draw_home_page(display_context_t* ctx)
 
     // 显示SSID
     if (home->wifi_state == WIFI_STATE_CONNECTED || home->wifi_state == WIFI_STATE_CONNECTING) {
-        lcd_display_string(ctx->lcd_handle, LINE1_TEXT_X, LINE1_TEXT_Y, home->ssid, LCD_FONT(ascii_8x16), false);
+        lcd_display_text(ctx->lcd_handle, LINE1_TEXT_X, LINE1_TEXT_Y, home->ssid, false);
     } /* else {
-        lcd_display_string(ctx->lcd_handle, LINE1_TEXT_X, LINE1_TEXT_Y, "N/A", LCD_FONT(ascii_8x16), false);
+        lcd_display_ascii_string(ctx->lcd_handle, LINE1_TEXT_X, LINE1_TEXT_Y, "N/A", LCD_FONT(ascii_8x16), false);
     }*/
 
     // 显示状态信息, 如果是离线,显示OFFLINE, 如果是已连接,显示IP地址.
@@ -932,11 +934,11 @@ static void draw_home_page(display_context_t* ctx)
         // 水平居中显示, 需要根据长度计算X坐标
         int text_width = strlen(home->ip_address) * 8; // ascii_8x16字体宽度为8
         int x = (128 - text_width) / 2;
-        lcd_display_string(ctx->lcd_handle, x, LINE2_TEXT_Y, home->ip_address, LCD_FONT(ascii_8x8), false);
+        lcd_display_ascii_string(ctx->lcd_handle, x, LINE2_TEXT_Y, home->ip_address, LCD_FONT(ascii_8x8), false);
     } else if (home->wifi_state == WIFI_STATE_CONNECTING) {
-        lcd_display_string(ctx->lcd_handle, 0, LINE2_TEXT_Y, "CONNECTING...", LCD_FONT(ascii_8x8), false);
+        lcd_display_ascii_string(ctx->lcd_handle, 0, LINE2_TEXT_Y, "CONNECTING...", LCD_FONT(ascii_8x8), false);
     } else {
-        lcd_display_string(ctx->lcd_handle, 0, LINE2_TEXT_Y, "NO NETWORK", LCD_FONT(ascii_8x8), false);
+        lcd_display_ascii_string(ctx->lcd_handle, 0, LINE2_TEXT_Y, "NO NETWORK", LCD_FONT(ascii_8x8), false);
     }
 
 
@@ -951,13 +953,13 @@ static void draw_home_page(display_context_t* ctx)
     // 右对齐显示, 需要根据长度计算X坐标
     int text_width = strlen(stat_str) * 8; // ascii_8x16字体宽度为8
     int x = (text_width > 128) ? 0 : (128 - text_width);
-    lcd_display_string(ctx->lcd_handle, x, LINE4_TEXT_Y, stat_str, LCD_FONT(ascii_8x8), false);
+    lcd_display_ascii_string(ctx->lcd_handle, x, LINE4_TEXT_Y, stat_str, LCD_FONT(ascii_8x8), false);
 
     // 最后一行, 右对齐显示统计信息, 左侧有空间才显示标题 
     const char *stats_title = "R/T";
     text_width = strlen(stats_title) * 8;
     if (x >= text_width) {
-        lcd_display_string(ctx->lcd_handle, 0, LINE4_TEXT_Y, stats_title, LCD_FONT(ascii_8x8), false);
+        lcd_display_ascii_string(ctx->lcd_handle, 0, LINE4_TEXT_Y, stats_title, LCD_FONT(ascii_8x8), false);
     }
 
 
@@ -1021,19 +1023,19 @@ static void draw_home_page(display_context_t* ctx)
     text_width = strlen(client_num_str) * 8;  // 8是字体宽度
     text_x = area1_x + (AREA1_WIDTH - text_width) / 2;
     text_y = INFO_AREA_START_Y + (INFO_AREA_HEIGHT - 16) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, client_num_str, LCD_FONT(ascii_8x16), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, client_num_str, LCD_FONT(ascii_8x16), true);
 
     #if 0
 
     // 显示端口号(区域2) - 居中显示
     text_width = strlen(port_str) * 8;
     text_x = area2_x + (AREA2_WIDTH - text_width) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, port_str, LCD_FONT(ascii_8x16), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, port_str, LCD_FONT(ascii_8x16), true);
 
     // 显示波特率(区域3) - 居中显示
     text_width = strlen(baudrate_str) * 8;
     text_x = area3_x + (AREA3_WIDTH - text_width) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, baudrate_str, LCD_FONT(ascii_8x16), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, baudrate_str, LCD_FONT(ascii_8x16), true);
 
     #else 
     // 方式2, 使用8X8字体, 区域二增加显示 PORT字样, 区域三增加显示 RATE字样, 需要居中显示 
@@ -1044,11 +1046,11 @@ static void draw_home_page(display_context_t* ctx)
 
     text_width = strlen(port_title) * 8;
     text_x = area2_x + (AREA2_WIDTH - text_width) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, port_title, LCD_FONT(ascii_8x8), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, port_title, LCD_FONT(ascii_8x8), true);
     
     text_width = strlen(rate_title) * 8;
     text_x = area3_x + (AREA3_WIDTH - text_width) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, rate_title, LCD_FONT(ascii_8x8), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, rate_title, LCD_FONT(ascii_8x8), true);
 
     // 计算第二行文字显示的Y坐标
     text_y = INFO_AREA_START_Y + 10 + (INFO_AREA_HEIGHT - 10 - 8) / 2;
@@ -1056,12 +1058,12 @@ static void draw_home_page(display_context_t* ctx)
     // 显示端口号(区域2) - 居中显示
     text_width = strlen(port_str) * 8;
     text_x = area2_x + (AREA2_WIDTH - text_width) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, port_str, LCD_FONT(ascii_8x8), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, port_str, LCD_FONT(ascii_8x8), true);
 
     // 显示波特率(区域3) - 居中显示
     text_width = strlen(baudrate_str) * 8;
     text_x = area3_x + (AREA3_WIDTH - text_width) / 2;
-    lcd_display_string(ctx->lcd_handle, text_x + 1, text_y, baudrate_str, LCD_FONT(ascii_8x8), true);
+    lcd_display_ascii_string(ctx->lcd_handle, text_x + 1, text_y, baudrate_str, LCD_FONT(ascii_8x8), true);
 
     #endif  
 
@@ -1072,7 +1074,7 @@ static void draw_home_page(display_context_t* ctx)
         text_width = strlen(cpu_usage_str) * 8;
         // 显示在右上角, 需要根据长度计算X坐标
         int x = (text_width > 128) ? 0 : (128 - text_width);
-        lcd_display_string(ctx->lcd_handle, x, 0, cpu_usage_str, LCD_FONT(ascii_8x8), false);
+        lcd_display_ascii_string(ctx->lcd_handle, x, 0, cpu_usage_str, LCD_FONT(ascii_8x8), false);
     }
 }
 
@@ -1121,7 +1123,7 @@ static void draw_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id)
         // 计算第一行文本宽度并居中显示
         int text_width = strlen(line1) * 8; // ascii_8x16字体宽度为8
         int x = POPUP_FRAME_X + (POPUP_FRAME_WIDTH - text_width) / 2;
-        lcd_display_string(ctx->lcd_handle,
+        lcd_display_ascii_string(ctx->lcd_handle,
             x,
             POPUP_FRAME_Y + POPUP_PADDING,
             line1,
@@ -1132,7 +1134,7 @@ static void draw_popup_msg(display_context_t* ctx, popup_msg_id_t msg_id)
         // 计算第二行文本宽度并居中显示
         int text_width = strlen(line2) * 8; // ascii_8x16字体宽度为8
         int x = POPUP_FRAME_X + (POPUP_FRAME_WIDTH - text_width) / 2;
-        lcd_display_string(ctx->lcd_handle,
+        lcd_display_ascii_string(ctx->lcd_handle,
             x,
             POPUP_FRAME_Y + POPUP_PADDING + 16, // 第二行Y坐标增加16(字体高度)
             line2,
@@ -1277,11 +1279,11 @@ static void draw_uart_page(display_context_t* ctx)
         
         // 如果是当前波特率，在行首显示'>'符号
         if ((start_index + i) == ctx->page.uart.selected_index) {
-            lcd_display_string(ctx->lcd_handle, right_start_x, start_y + i * line_height, ">", LCD_FONT(ascii_8x16), false);
+            lcd_display_ascii_string(ctx->lcd_handle, right_start_x, start_y + i * line_height, ">", LCD_FONT(ascii_8x16), false);
         }
         
         // 显示波特率值
-        lcd_display_string(ctx->lcd_handle, right_start_x + right_icon_width, start_y + i * line_height, buffer, LCD_FONT(ascii_8x16), false);
+        lcd_display_ascii_string(ctx->lcd_handle, right_start_x + right_icon_width, start_y + i * line_height, buffer, LCD_FONT(ascii_8x16), false);
     }
 }
 
@@ -1291,7 +1293,7 @@ static void draw_network_page(display_context_t* ctx)
     
     // 如果没有保存的网络，显示提示信息
     if (network->saved_network_count == 0) {
-        lcd_display_string(ctx->lcd_handle, 0, 24, "No Networks", LCD_FONT(ascii_8x16), false);
+        lcd_display_ascii_string(ctx->lcd_handle, 0, 24, "No Networks", LCD_FONT(ascii_8x16), false);
         return;
     }
     
@@ -1322,7 +1324,7 @@ static void draw_network_page(display_context_t* ctx)
         
         // 如果是当前选中的网络，显示'>'符号
         if (network_index == network->selected_index) {
-            lcd_display_string(ctx->lcd_handle, 0, y_pos, ">", LCD_FONT(ascii_8x16), false);
+            lcd_display_ascii_string(ctx->lcd_handle, 0, y_pos, ">", LCD_FONT(ascii_8x16), false);
         }
         
         // 根据信号等级选择合适的图标
@@ -1355,7 +1357,7 @@ static void draw_network_page(display_context_t* ctx)
         strncpy(ssid_display, saved_network->ssid, sizeof(ssid_display) - 1);
         ssid_display[sizeof(ssid_display) - 1] = '\0';
         
-        lcd_display_string(ctx->lcd_handle, ssid_start_x, y_pos, ssid_display, LCD_FONT(ascii_8x16), false);
+        lcd_display_ascii_string(ctx->lcd_handle, ssid_start_x, y_pos, ssid_display, LCD_FONT(ascii_8x16), false);
     }
 }
 
@@ -1411,16 +1413,16 @@ static void draw_help_page(display_context_t* ctx)
     // 行1: 版本号（8x16字体）
     char short_version[16];
     extract_short_version(APP_VERSION, short_version, sizeof(short_version));
-    lcd_display_string(ctx->lcd_handle, 0, 0, short_version, LCD_FONT(ascii_8x16), false);
+    lcd_display_ascii_string(ctx->lcd_handle, 0, 0, short_version, LCD_FONT(ascii_8x16), false);
     
     // 行2: 编译日期（8x8字体，紧凑显示）
-    lcd_display_string(ctx->lcd_handle, 0, 18, BUILD_DATE, LCD_FONT(ascii_8x8), false);
+    lcd_display_ascii_string(ctx->lcd_handle, 0, 18, BUILD_DATE, LCD_FONT(ascii_8x8), false);
 
     // 行3: 显示文本“Scan for”， 8x8字体
-    lcd_display_string(ctx->lcd_handle, 0, 40, "SCAN FOR", LCD_FONT(ascii_8x8), false);
+    lcd_display_ascii_string(ctx->lcd_handle, 0, 40, "SCAN FOR", LCD_FONT(ascii_8x8), false);
 
     // 行4: 显示文本“help”， 8x8字体
-    lcd_display_string(ctx->lcd_handle, 0, 50, "  HELP", LCD_FONT(ascii_8x8), false);
+    lcd_display_ascii_string(ctx->lcd_handle, 0, 50, "  HELP", LCD_FONT(ascii_8x8), false);
 }
 
 
